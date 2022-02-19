@@ -80,3 +80,26 @@ pub fn create_worker(port: Vec<Url>) -> Result<Box<dyn Worker>> {
         _ => Err(anyhow!(""))?,
     }
 }
+
+#[cfg(test)]
+mod test {
+    use url::Url;
+
+    use super::create_worker;
+
+    #[test]
+    fn test_create_worker() {
+        let dest_port = Url::parse("udp://127.0.0.1:8001").unwrap();
+        let local_port = Url::parse("udp://127.0.0.1:0").unwrap();
+        let port = vec![dest_port, local_port];
+        assert!(create_worker(port).is_ok());
+    }
+
+    #[test]
+    fn test_create_worker_from_invalid_url() {
+        let dest_port = Url::parse("pdu://127.0.0.1:8001").unwrap();
+        let local_port = Url::parse("pdu://127.0.0.1:0").unwrap();
+        let port = vec![dest_port, local_port];
+        assert!(create_worker(port).is_err());
+    }
+}
