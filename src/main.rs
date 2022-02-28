@@ -25,7 +25,7 @@ struct Args {
     listen_to_port: Url,
 
     /// Sending port for the testing data (required when using udp in "listen-to" port)
-    #[clap(long = "listen-from")]
+    #[clap(long = "listen-from", validator(url_validator))]
     listen_from_port: Option<Url>,
 
     /// Destination of the testing data
@@ -33,18 +33,18 @@ struct Args {
     send_to_port: Url,
 
     /// Sending port for the testing data (required when using udp in "send-to" port)
-    #[clap(long = "send-from")]
+    #[clap(long = "send-from", validator(url_validator))]
     send_from_port: Option<Url>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     println!(
-        "Test will send data to {} and listen to {}",
+        "Tester will send data to {} and listen to {}",
         args.send_to_port, args.listen_to_port
     );
 
-    // let output_worker = workers::create_worker(args.output_port)?;
+    let output_worker = workers::create_worker(args.send_to_port, args.send_from_port)?;
     // output_worker.send();
 
     Ok(())
