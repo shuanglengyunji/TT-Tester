@@ -1,13 +1,8 @@
 use anyhow::Context;
 use anyhow::{anyhow, Result};
 use std::net::UdpSocket;
-use url::{Position, Url};
 
 pub trait Worker {
-    fn create(remote_port: Url, local_port: Option<Url>) -> Result<Box<dyn Worker>>
-    where
-        Self: Sized;
-
     fn send(&self);
 }
 
@@ -16,76 +11,66 @@ struct UdpWorker {
 }
 
 impl Worker for UdpWorker {
-    fn create(
-        remote_port: Url,
-        local_port: Option<Url>,
-    ) -> Result<Box<(dyn Worker + 'static)>, anyhow::Error> {
-        let socket = UdpSocket::bind(
-            &local_port.clone().unwrap_or(Url::parse("udp://0.0.0.0:0")?)
-                [Position::BeforeHost..Position::AfterPath],
-        )?;
-
-        // Unlike in the TCP case, passing an array of addresses to the connect function
-        // of a UDP socket is not a useful thing to do: The OS will be unable to determine
-        // whether something is listening on the remote address without the application
-        // sending data.
-        socket
-            .connect(&remote_port[Position::BeforeHost..Position::AfterPath])
-            .with_context(|| {
-                format!(
-                    "Couldn't connect udp worker with local address {:?} to dest address {}",
-                    local_port, remote_port
-                )
-            })?;
-
-        Ok(Box::new(UdpWorker { socket }))
-    }
-
     fn send(&self) {
         let buf = [0u8, 1, 2, 3];
         self.socket.send(&buf).expect(
             format!(
                 "Udp worker cannot send package from local address {:?} to dest address {:?}",
-                self.socket.local_addr(), self.socket.peer_addr()
+                self.socket.local_addr(),
+                self.socket.peer_addr()
             )
             .as_str(),
         );
     }
 }
 
-pub fn create_worker(remote_port: Url, local_port: Option<Url>) -> Result<Box<dyn Worker>> {
-    match remote_port.scheme() {
-        // "serial" => todo!(),
-        "udp" => UdpWorker::create(remote_port, local_port),
-        // "tcpclient" => todo!(),
-        _ => Err(anyhow!(""))?,
+impl UdpWorker {
+    fn create(port: &str) -> Result<Box<(dyn Worker)>, anyhow::Error> {
+        // port must in this format: udp,local_ip:port,remote_ip:port
+
+        let list: Vec<&str> = port.split(',').collect();
+        if list.len() != 3 {
+            return Err(anyhow!("port invalid"));
+        }
+
+        let socket = UdpSocket::bind(list[1]).with_context(|| "Failed to bind udp client")?;
+
+        // Unlike in the TCP case, passing an array of addresses to the connect function
+        // of a UDP socket is not a useful thing to do: The OS will be unable to determine
+        // whether something is listening on the remote address without the application
+        // sending data.
+        socket
+            .connect(list[2])
+            .with_context(|| "Failed to connect remote port")?;
+
+        Ok(Box::new(UdpWorker { socket }))
+    }
+}
+
+pub fn create_worker(port: &str) -> Result<Box<dyn Worker>> {
+    if port.starts_with("udp") {
+        UdpWorker::create(port)
+    } else {
+        Err(anyhow!(""))
     }
 }
 
 #[cfg(test)]
 mod test {
-    use url::Url;
-
     use super::create_worker;
 
     #[test]
     fn test_create_udp_worker() {
-        let remote_port = Url::parse("udp://127.0.0.1:8001").unwrap();
-        let local_port = Some(Url::parse("udp://127.0.0.1:0").unwrap());
-        assert!(create_worker(remote_port, local_port).is_ok());
+        assert!(create_worker("udp,127.0.0.1:8000,127.0.0.1:8001").is_ok());
     }
 
     #[test]
     fn test_create_udp_worker_without_local_port() {
-        let remote_port = Url::parse("udp://127.0.0.1:8001").unwrap();
-        let local_port = None;
-        assert!(create_worker(remote_port, local_port).is_ok());
+        assert!(create_worker("udp,,127.0.0.1:8001").is_err());
     }
 
     #[test]
     fn test_create_udp_worker_from_invalid_url() {
-        let remote_port = Url::parse("invalid://127.0.0.1:8001").unwrap();
-        let local_port = Some(Url::parse("invalid://127.0.0.1:0").unwrap());
-        assert!(create_worker(remote_port, local_port).is_err());
+        assert!(create_worker("invalid,127.0.0.1:8000,127.0.0.1:8001").is_err());
     }
 }

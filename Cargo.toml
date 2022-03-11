@@ -8,5 +8,4 @@ authors = ["Han Liu <liuhan211211@gmail.com>"]
 
 [dependencies]
 clap = { version = "3.0.14", features = ["derive", "wrap_help"] }
-url = "2.2.2"
 anyhow = {version = "1.0.53", features = ["backtrace"]}

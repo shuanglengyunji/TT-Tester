@@ -1,18 +1,13 @@
 use anyhow::Result;
 use clap::Parser;
-use url::Url;
 
 mod workers;
 
-fn url_validator(v: &str) -> Result<(), String> {
-    match Url::parse(v) {
-        Ok(u) => match u.scheme() {
-            "tcpclient" => Ok(()),
-            "udp" => Ok(()),
-            "serial" => Ok(()),
-            _ => Err(String::from("Url scheme not supported")),
-        },
-        Err(error) => Err(String::from("Url invalid: ") + &error.to_string()),
+fn port_validator(v: &str) -> Result<(), String> {
+    if v.starts_with("tcp") || v.starts_with("udp") || v.starts_with("serial") {
+        Ok(())
+    } else {
+        Err(String::from("Port invalid"))
     }
 }
 
@@ -20,32 +15,43 @@ fn url_validator(v: &str) -> Result<(), String> {
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
 struct Args {
-    /// Listening port for the testing data
-    #[clap(long = "listen-to", validator(url_validator))]
-    listen_to_port: Url,
+    /// listener port in format: type,local,remote
+    #[clap(long = "listener", validator(port_validator))]
+    listener_port: String,
 
-    /// Sending port for the testing data (required when using udp in "listen-to" port)
-    #[clap(long = "listen-from", validator(url_validator))]
-    listen_from_port: Option<Url>,
-
-    /// Destination of the testing data
-    #[clap(long = "send-to", validator(url_validator))]
-    send_to_port: Url,
-
-    /// Sending port for the testing data (required when using udp in "send-to" port)
-    #[clap(long = "send-from", validator(url_validator))]
-    send_from_port: Option<Url>,
+    /// sender port in format: type,local,remote
+    #[clap(long = "sender", validator(port_validator))]
+    sender_port: String,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    println!(
-        "Tester will send data to {} and listen to {}",
-        args.send_to_port, args.listen_to_port
-    );
+    println!("listener: {}", args.listener_port);
+    println!("sender: {}", args.sender_port);
 
-    let output_worker = workers::create_worker(args.send_to_port, args.send_from_port)?;
+    let listener = workers::create_worker(&args.listener_port)?;
+    let sender = workers::create_worker(&args.sender_port)?;
     // output_worker.send();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{port_validator, workers::create_worker};
+
+    #[test]
+    fn test_create_worker() {
+        assert!(create_worker("udp,127.0.0.1:8000,127.0.0.1:8001").is_ok());
+    }
+
+    #[test]
+    fn test_port_validator_with_valid_port() {
+        assert!(port_validator("udp,,").is_ok());
+    }
+
+    #[test]
+    fn test_port_validator_with_invalid_port() {
+        assert!(port_validator("invalid,,").is_err());
+    }
 }
