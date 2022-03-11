@@ -3,7 +3,9 @@ use anyhow::{anyhow, Result};
 use std::net::UdpSocket;
 
 pub trait Worker {
-    fn send(&self);
+    fn send(&self, buf: Vec<u8>) -> Result<usize>;
+
+    fn receive(&self) -> Result<Vec<u8>>;
 }
 
 struct UdpWorker {
@@ -11,16 +13,16 @@ struct UdpWorker {
 }
 
 impl Worker for UdpWorker {
-    fn send(&self) {
-        let buf = [0u8, 1, 2, 3];
-        self.socket.send(&buf).expect(
-            format!(
-                "Udp worker cannot send package from local address {:?} to dest address {:?}",
-                self.socket.local_addr(),
-                self.socket.peer_addr()
-            )
-            .as_str(),
-        );
+    fn send(&self, buf: Vec<u8>) -> Result<usize> {
+        self.socket
+            .send(&buf)
+            .or(Err(anyhow!("Failed to send data")))
+    }
+
+    fn receive(&self) -> Result<Vec<u8>> {
+        let mut buf = [0u8; 2048]; // max 2k
+        let size = self.socket.recv(&mut buf)?;
+        Ok(buf[..size].to_vec())
     }
 }
 
@@ -57,6 +59,8 @@ pub fn create_worker(port: &str) -> Result<Box<dyn Worker>> {
 
 #[cfg(test)]
 mod test {
+    use std::{net::UdpSocket, thread};
+
     use super::create_worker;
 
     #[test]
@@ -72,5 +76,35 @@ mod test {
     #[test]
     fn test_create_udp_worker_from_invalid_url() {
         assert!(create_worker("invalid,127.0.0.1:8000,127.0.0.1:8001").is_err());
+    }
+
+    #[test]
+    fn test_send_udp() {
+        let test_receiver = UdpSocket::bind("127.0.0.1:8001").unwrap();
+        // test_receiver.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+
+        thread::spawn(|| {
+            let buf = [1u8, 2, 3, 4];
+            let udpworker = create_worker("udp,127.0.0.1:8000,127.0.0.1:8001").unwrap();
+            assert!(udpworker.send(buf.to_vec()).is_ok());
+        });
+
+        let mut buf = [0u8; 4];
+        test_receiver.recv(&mut buf).unwrap();
+        assert_eq!(buf, [1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_receive_udp() {
+        let udpworker = create_worker("udp,127.0.0.1:8000,127.0.0.1:8001").unwrap();
+
+        thread::spawn(|| {
+            let test_sender = UdpSocket::bind("127.0.0.1:8001").unwrap();
+            let buf = [1u8, 2, 3, 4];
+            test_sender.send_to(&buf, "127.0.0.1:8000").unwrap();
+        });
+
+        let buf = udpworker.receive().unwrap();
+        assert_eq!(buf, vec![1u8, 2, 3, 4]);
     }
 }
