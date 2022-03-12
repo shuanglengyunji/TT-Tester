@@ -58,9 +58,7 @@ fn main() -> Result<()> {
         println!("[dispatcher_thread]  release pkg: {:?}", pkg.clone());
 
         sender_tx.send(pkg.clone()).unwrap();
-        let received = listener_rx
-            .recv_timeout(Duration::from_millis(10))
-            .unwrap();
+        let received = listener_rx.recv_timeout(Duration::from_millis(10)).unwrap();
 
         assert_eq!(received, pkg);
         println!("[dispatcher_thread] pkg verified");

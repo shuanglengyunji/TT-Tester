@@ -63,6 +63,8 @@ pub fn create_worker(port: &str) -> Result<Box<dyn Worker>> {
 mod test {
     use std::{net::UdpSocket, thread, time::Duration};
 
+    use crate::workers::{UdpWorker, Worker};
+
     use super::create_worker;
 
     #[test]
@@ -83,7 +85,6 @@ mod test {
     #[test]
     fn test_send_udp() {
         let test_receiver = UdpSocket::bind("127.0.0.1:8001").unwrap();
-        // test_receiver.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
 
         thread::spawn(|| {
             let buf = [1u8, 2, 3, 4];
@@ -96,6 +97,15 @@ mod test {
         let mut buf = [0u8; 4];
         test_receiver.recv(&mut buf).unwrap();
         assert_eq!(buf, [1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_send_udp_to_invalid_url() {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let udpworker: Box<dyn Worker> = Box::new(UdpWorker { socket });
+        assert!(udpworker
+            .send(vec![1u8, 2, 3, 4], Some(Duration::from_millis(100)))
+            .is_err());
     }
 
     #[test]
