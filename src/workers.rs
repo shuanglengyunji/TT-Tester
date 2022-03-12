@@ -1,11 +1,11 @@
 use anyhow::Context;
 use anyhow::{anyhow, Result};
 use std::net::UdpSocket;
+use std::time::Duration;
 
 pub trait Worker {
-    fn send(&self, buf: Vec<u8>) -> Result<usize>;
-
-    fn receive(&self) -> Result<Vec<u8>>;
+    fn send(&self, buf: Vec<u8>, timeout: Option<Duration>) -> Result<usize>;
+    fn receive(&self, timeout: Option<Duration>) -> Result<Vec<u8>>;
 }
 
 struct UdpWorker {
@@ -13,14 +13,16 @@ struct UdpWorker {
 }
 
 impl Worker for UdpWorker {
-    fn send(&self, buf: Vec<u8>) -> Result<usize> {
+    fn send(&self, buf: Vec<u8>, timeout: Option<Duration>) -> Result<usize> {
+        self.socket.set_write_timeout(timeout)?;
         self.socket
             .send(&buf)
             .or(Err(anyhow!("Failed to send data")))
     }
 
-    fn receive(&self) -> Result<Vec<u8>> {
+    fn receive(&self, timeout: Option<Duration>) -> Result<Vec<u8>> {
         let mut buf = [0u8; 2048]; // max 2k
+        self.socket.set_read_timeout(timeout)?;
         let size = self.socket.recv(&mut buf)?;
         Ok(buf[..size].to_vec())
     }
@@ -53,13 +55,13 @@ pub fn create_worker(port: &str) -> Result<Box<dyn Worker>> {
     if port.starts_with("udp") {
         UdpWorker::create(port)
     } else {
-        Err(anyhow!(""))
+        Err(anyhow!("No compatible worker found"))
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{net::UdpSocket, thread};
+    use std::{net::UdpSocket, thread, time::Duration};
 
     use super::create_worker;
 
@@ -86,7 +88,9 @@ mod test {
         thread::spawn(|| {
             let buf = [1u8, 2, 3, 4];
             let udpworker = create_worker("udp,127.0.0.1:8000,127.0.0.1:8001").unwrap();
-            assert!(udpworker.send(buf.to_vec()).is_ok());
+            assert!(udpworker
+                .send(buf.to_vec(), Some(Duration::from_millis(100)))
+                .is_ok());
         });
 
         let mut buf = [0u8; 4];
@@ -104,7 +108,13 @@ mod test {
             test_sender.send_to(&buf, "127.0.0.1:8000").unwrap();
         });
 
-        let buf = udpworker.receive().unwrap();
+        let buf = udpworker.receive(Some(Duration::from_millis(100))).unwrap();
         assert_eq!(buf, vec![1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_receive_udp_timeout() {
+        let udpworker = create_worker("udp,127.0.0.1:8000,127.0.0.1:8001").unwrap();
+        assert!(udpworker.receive(Some(Duration::from_millis(100))).is_err());
     }
 }
