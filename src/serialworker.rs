@@ -1,16 +1,16 @@
 use std::time::Duration;
 
-use serialport::SerialPort;
+use crate::workers::Worker;
 use anyhow::Context;
 use anyhow::{anyhow, Result};
-use crate::workers::Worker;
+use serialport::SerialPort;
 
 pub(crate) struct SerialWorker {
     serial: Box<dyn SerialPort>,
 }
 
 impl Worker for SerialWorker {
-    fn send(self: &SerialWorker, buf: Vec<u8>, timeout: Option<Duration>) -> Result<usize> {
+    fn send(self: &SerialWorker, buf: Vec<u8>, timeout: Option<Duration>) -> Result<()> {
         todo!()
     }
 

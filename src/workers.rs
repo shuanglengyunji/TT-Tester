@@ -1,11 +1,11 @@
-use crate::udpworker::UdpWorker;
 use crate::serialworker::SerialWorker;
+use crate::udpworker::UdpWorker;
 use anyhow::{anyhow, Result};
 
 use std::time::Duration;
 
 pub trait Worker {
-    fn send(&self, buf: Vec<u8>, timeout: Option<Duration>) -> Result<usize>;
+    fn send(&self, buf: Vec<u8>, timeout: Option<Duration>) -> Result<()>;
     fn receive(&self, timeout: Option<Duration>) -> Result<Vec<u8>>;
     fn create(port: &str) -> Result<Box<(dyn Worker)>, anyhow::Error>
     where
