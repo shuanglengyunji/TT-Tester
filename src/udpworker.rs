@@ -61,10 +61,10 @@ impl Worker for UdpWorker {
         thread::spawn(move || loop {
             if let Ok(pkg) = sender_rx.try_recv() {
                 socket_tx.send(&pkg).unwrap();
-                println!("[sender_thread] sent: {:?}", pkg);
+                // println!("[sender_thread] sent: {:?}", pkg);
             }
             if bus_tx.try_recv().is_ok() {
-                println!("[sender_thread] sender thread stopped");
+                // println!("[sender_thread] sender thread stopped");
                 break;
             }
         });
@@ -77,11 +77,11 @@ impl Worker for UdpWorker {
             loop {
                 if let Ok(size) = socket_rx.recv(&mut buf) {
                     let received = buf[..size].to_vec();
-                    println!("[listener_thread] received: {:?}", received);
+                    // println!("[listener_thread] received: {:?}", received);
                     listener_tx.send(received).unwrap();
                 }
                 if bus_rx.try_recv().is_ok() {
-                    println!("[listener_thread] listener thread stopped");
+                    // println!("[listener_thread] listener thread stopped");
                     break;
                 }
             }
