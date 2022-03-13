@@ -4,6 +4,8 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
+mod udpworker;
+mod serialworker;
 mod workers;
 
 fn port_validator(v: &str) -> Result<(), String> {
