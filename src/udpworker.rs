@@ -98,17 +98,14 @@ impl Worker for UdpWorker {
 #[cfg(test)]
 mod test {
     use crate::{udpworker::UdpWorker, workers::Worker};
-    use serial_test::serial;
     use std::{net::UdpSocket, thread, time::Duration};
 
     #[test]
-    #[serial]
     fn test_create_udp_with_invalid_remote_port() {
         assert!(UdpWorker::create("udp,127.0.0.1:8000,invalid:8001").is_err())
     }
 
     #[test]
-    #[serial]
     fn test_send_udp() {
         let test_receiver = UdpSocket::bind("127.0.0.1:8001").unwrap();
 
@@ -126,7 +123,6 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn test_receive_udp() {
         let udpworker = UdpWorker::create("udp,127.0.0.1:8000,127.0.0.1:8001").unwrap();
 
@@ -141,9 +137,8 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn test_receive_udp_timeout() {
-        let udpworker = UdpWorker::create("udp,127.0.0.1:8000,127.0.0.1:8001").unwrap();
+        let udpworker = UdpWorker::create("udp,127.0.0.1:0,127.0.0.1:5000").unwrap();
         assert!(udpworker.receive(Some(Duration::from_millis(100))).is_err());
     }
 }

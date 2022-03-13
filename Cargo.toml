@@ -10,5 +10,4 @@ authors = ["Han Liu <liuhan211211@gmail.com>"]
 clap = { version = "3.0.14", features = ["derive", "wrap_help"] }
 anyhow = {version = "1.0.53", features = ["backtrace"]}
 serialport = "4.0.1"
-serial_test = "0.6.0"
 bus = "2.2.3"
