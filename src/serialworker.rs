@@ -153,7 +153,9 @@ mod test {
             test_sender.write_all(&mut buf).unwrap();
         });
 
-        let buf = serialworker.receive(Some(Duration::from_millis(100))).unwrap();
+        let buf = serialworker
+            .receive(Some(Duration::from_millis(100)))
+            .unwrap();
         assert_eq!(buf, vec![1u8, 2, 3, 4]);
     }
 
@@ -161,6 +163,8 @@ mod test {
     #[test_context(VirtualSerialPort)]
     fn test_receive_serial_timeout() {
         let serialworker = SerialWorker::create("serial,/tmp/serial1,115200").unwrap();
-        assert!(serialworker.receive(Some(Duration::from_millis(100))).is_err());
+        assert!(serialworker
+            .receive(Some(Duration::from_millis(100)))
+            .is_err());
     }
 }
