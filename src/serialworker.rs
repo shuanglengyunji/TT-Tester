@@ -81,3 +81,86 @@ impl Worker for SerialWorker {
         }))
     }
 }
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod test {
+    use crate::{serialworker::SerialWorker, workers::Worker};
+    use std::process::Command;
+    use std::{process::Child, thread, time::Duration};
+
+    use serialport;
+    use test_context::{test_context, TestContext};
+
+    struct VirtualSerialPort {
+        child: Child,
+    }
+
+    impl TestContext for VirtualSerialPort {
+        fn setup() -> VirtualSerialPort {
+            let child = Command::new("socat")
+                .arg("-dd")
+                .arg("pty,raw,echo=0,link=/tmp/serial1")
+                .arg("pty,raw,echo=0,link=/tmp/serial2")
+                .spawn()
+                .expect("Failed to setup virtual serial port process");
+            thread::sleep(Duration::from_millis(500)); // wait for socat to setup virtual port
+            VirtualSerialPort { child }
+        }
+
+        fn teardown(mut self) {
+            self.child
+                .kill()
+                .expect("Failed to stop virtual serial port process");
+        }
+    }
+
+    #[test]
+    #[test_context(VirtualSerialPort)]
+    fn test_create_serial() {
+        assert!(SerialWorker::create("serial,/tmp/serial1,115200").is_ok());
+    }
+
+    #[test]
+    #[test_context(VirtualSerialPort)]
+    fn test_create_serial_with_invalid_device() {
+        assert!(SerialWorker::create("serial,/dev/invalid,115200").is_err())
+    }
+
+    #[test]
+    #[test_context(VirtualSerialPort)]
+    fn test_create_serial_with_invalid_baudrate() {
+        assert!(SerialWorker::create("serial,/tmp/serial1,invalid").is_err())
+    }
+
+    #[test]
+    #[test_context(VirtualSerialPort)]
+    fn test_send_serial() {
+        let buf = [1u8, 2, 3, 4];
+        let serialworker = SerialWorker::create("serial,/tmp/serial1,115200").unwrap();
+        assert!(serialworker.send(buf.to_vec(), None).is_ok());
+    }
+
+    #[test]
+    #[test_context(VirtualSerialPort)]
+    #[ignore = "Bug in serialport"]
+    fn test_receive_serial() {
+        let serialworker = SerialWorker::create("serial,/tmp/serial1,115200").unwrap();
+
+        thread::spawn(|| {
+            let mut buf = [1u8, 2, 3, 4];
+            let mut test_sender = serialport::new("/tmp/serial2", 115200).open().unwrap();
+            test_sender.write_all(&mut buf).unwrap();
+        });
+
+        let buf = serialworker.receive(Some(Duration::from_millis(100))).unwrap();
+        assert_eq!(buf, vec![1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    #[test_context(VirtualSerialPort)]
+    fn test_receive_serial_timeout() {
+        let serialworker = SerialWorker::create("serial,/tmp/serial1,115200").unwrap();
+        assert!(serialworker.receive(Some(Duration::from_millis(100))).is_err());
+    }
+}

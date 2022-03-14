@@ -23,7 +23,7 @@ jobs:
           toolchain: stable
           override: true
       - name: Install library
-        run: sudo apt-get install -y libudev-dev
+        run: sudo apt-get install -y libudev-dev socat
       - name: Run cargo-tarpaulin
         uses: actions-rs/tarpaulin@v0.1
         with:

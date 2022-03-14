@@ -101,6 +101,11 @@ mod test {
     use std::{net::UdpSocket, thread, time::Duration};
 
     #[test]
+    fn test_create_udp() {
+        assert!(UdpWorker::create("udp,127.0.0.1:8000,127.0.0.1:8001").is_ok())
+    }
+
+    #[test]
     fn test_create_udp_with_invalid_remote_port() {
         assert!(UdpWorker::create("udp,127.0.0.1:8000,invalid:8001").is_err())
     }
@@ -124,12 +129,12 @@ mod test {
 
     #[test]
     fn test_receive_udp() {
-        let udpworker = UdpWorker::create("udp,127.0.0.1:8000,127.0.0.1:8001").unwrap();
+        let udpworker = UdpWorker::create("udp,127.0.0.1:7000,127.0.0.1:7001").unwrap();
 
         thread::spawn(|| {
-            let test_sender = UdpSocket::bind("127.0.0.1:8001").unwrap();
+            let test_sender = UdpSocket::bind("127.0.0.1:7001").unwrap();
             let buf = [1u8, 2, 3, 4];
-            test_sender.send_to(&buf, "127.0.0.1:8000").unwrap();
+            test_sender.send_to(&buf, "127.0.0.1:7000").unwrap();
         });
 
         let buf = udpworker.receive(Some(Duration::from_millis(100))).unwrap();
