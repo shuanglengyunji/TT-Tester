@@ -116,25 +116,21 @@ mod test {
     }
 
     #[test]
-    #[test_context(VirtualSerialPort)]
     fn test_create_serial() {
         assert!(SerialWorker::create("serial,/tmp/serial1,115200").is_ok());
     }
 
     #[test]
-    #[test_context(VirtualSerialPort)]
     fn test_create_serial_with_invalid_device() {
         assert!(SerialWorker::create("serial,/dev/invalid,115200").is_err())
     }
 
     #[test]
-    #[test_context(VirtualSerialPort)]
     fn test_create_serial_with_invalid_baudrate() {
         assert!(SerialWorker::create("serial,/tmp/serial1,invalid").is_err())
     }
 
     #[test]
-    #[test_context(VirtualSerialPort)]
     fn test_send_serial() {
         let buf = [1u8, 2, 3, 4];
         let serialworker = SerialWorker::create("serial,/tmp/serial1,115200").unwrap();
@@ -142,7 +138,6 @@ mod test {
     }
 
     #[test]
-    #[test_context(VirtualSerialPort)]
     #[ignore = "Bug in serialport"]
     fn test_receive_serial() {
         let serialworker = SerialWorker::create("serial,/tmp/serial1,115200").unwrap();
@@ -160,7 +155,6 @@ mod test {
     }
 
     #[test]
-    #[test_context(VirtualSerialPort)]
     fn test_receive_serial_timeout() {
         let serialworker = SerialWorker::create("serial,/tmp/serial1,115200").unwrap();
         assert!(serialworker
