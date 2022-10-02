@@ -16,6 +16,6 @@ jobs:
     - name: Create virtual serial ports
       run: tools/create_serial_port_pair.sh &
     - name: Build
-      run: cargo build --verbose
+      run: cargo build
     - name: Test
       run: RUST_BACKTRACE=1 cargo test -- --test-threads 1
