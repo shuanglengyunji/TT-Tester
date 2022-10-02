@@ -3,18 +3,13 @@ name: code-coverage
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-
-  check:
-
+  code-coverage:
     runs-on: ubuntu-latest
-    
     steps:
       - uses: actions/checkout@v3
       - name: Install stable toolchain
@@ -23,9 +18,9 @@ jobs:
           toolchain: stable
           override: true
       - name: Install library
-        run: | 
-          sudo apt-get install -y libudev-dev socat
-          socat -dd pty,raw,echo=0,link=/tmp/serial1 pty,raw,echo=0,link=/tmp/serial2 &
+        run: sudo apt-get install -y libudev-dev socat
+      - name: Create virtual serial ports
+        run: tools/create_serial_port_pair.sh &
       - name: Run cargo-tarpaulin
         uses: actions-rs/tarpaulin@v0.1
         with:
