@@ -99,8 +99,13 @@ mod test {
         });
 
         let mut buf = [0u8; 4]; // max 2k
-        assert!(test_receiver.read(&mut buf).is_ok());
-        assert_eq!(data, buf)
+        loop {
+            if let Ok(size) = test_receiver.read(&mut buf) {
+                assert_eq!(size, data.len());
+                assert_eq!(data, buf);
+                break;
+            }
+        }
     }
 
     #[test]
