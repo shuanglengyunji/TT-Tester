@@ -79,7 +79,7 @@ impl SerialDevice {
 mod test {
     use crate::{device::Device, serialdevice::SerialDevice};
     use serialport;
-    use std::{thread, time::Duration};
+    use std::thread;
 
     #[test]
     fn test_create_serial() {
@@ -92,9 +92,11 @@ mod test {
         let data = [1u8, 2, 3, 4];
         let mut test_receiver = serialport::new("/tmp/serial2", 115200).open().unwrap();
 
-        let serial_device = SerialDevice::create("/tmp/serial1", 115200).unwrap();
-        let sender = serial_device.sender().unwrap();
-        assert!(sender.send(data.to_vec()).is_ok());
+        thread::spawn(move || {
+            let serial_device = SerialDevice::create("/tmp/serial1", 115200).unwrap();
+            let sender = serial_device.sender().unwrap();
+            assert!(sender.send(data.to_vec()).is_ok());
+        });
 
         let mut buf = [0u8; 4]; // max 2k
         assert!(test_receiver.read(&mut buf).is_ok());
@@ -107,7 +109,6 @@ mod test {
         let mut serial_device = SerialDevice::create("/tmp/serial1", 115200).unwrap();
 
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs_f32(0.2));
             let mut test_sender = serialport::new("/tmp/serial2", 115200).open().unwrap();
             test_sender.write_all(&data).unwrap();
         });
