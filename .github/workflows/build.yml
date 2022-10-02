@@ -7,6 +7,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  build: 
+    runs-on: ubuntu-latest
+    - uses: actions/checkout@v3
+    - name: Install library
+      run: sudo apt-get install -y libudev-dev
+    - name: Build
+      run: cargo build --verbose
   unit-test:
     runs-on: ubuntu-latest
     steps:
@@ -15,7 +22,5 @@ jobs:
       run: sudo apt-get install -y libudev-dev socat
     - name: Create virtual serial ports
       run: tools/create_serial_port_pair.sh &
-    - name: Build
-      run: cargo build --verbose
     - name: Run tests
       run: RUST_BACKTRACE=1 cargo test --verbose -- --test-threads 1
