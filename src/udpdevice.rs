@@ -35,15 +35,16 @@ impl Device for UdpDevice {
 impl UdpDevice {
     /// local_addr: str in "local_ip:port" format
     /// remote_ip: str in "remote_ip:port" format
-    fn create(local_addr: &str, remote_addr: &str) -> Result<UdpDevice, anyhow::Error> {
-        let socket = UdpSocket::bind(local_addr).with_context(|| "Failed to bind udp client")?;
+    pub fn create(local_addr: &str, remote_addr: &str) -> Result<UdpDevice, anyhow::Error> {
+        let socket = UdpSocket::bind(local_addr)
+            .with_context(|| format!("Failed to bind udp client to local_addr {}", local_addr))?;
         socket
             .set_nonblocking(true)
             .with_context(|| "Failed to set nonblocking mode")?;
         // Note: Udp doesn't "connect", it just record the remote addr in the object
         socket
             .connect(remote_addr)
-            .with_context(|| "Failed to connect remote port")?;
+            .with_context(|| format!("Failed to connect udp client to remote_addr {}", remote_addr))?;
         let socket_tx = socket.try_clone()?;
         let socket_rx = socket.try_clone()?;
 

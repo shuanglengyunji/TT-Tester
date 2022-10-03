@@ -1,29 +1,23 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
+use device::Device;
+use url::Url;
 
 mod device;
 mod serialdevice;
 mod udpdevice;
 
-fn port_validator(v: &str) -> Result<(), String> {
-    if v.starts_with("tcp") || v.starts_with("udp") || v.starts_with("serial") {
-        Ok(())
-    } else {
-        Err(String::from("Port invalid"))
-    }
-}
-
 /// A speed and loss rate tester for transparent bridge between tcp, udp and serial port
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
 struct Args {
-    /// listener port in format: type,local,remote
-    #[clap(long = "listener", short = 'l', validator(port_validator))]
-    listener_port: String,
+    /// url of device a
+    #[clap(long = "device-a", short = 'a')]
+    device_a: String,
 
-    /// sender port in format: type,local,remote
-    #[clap(long = "sender", short = 's', validator(port_validator))]
-    sender_port: String,
+    /// url of device b
+    #[clap(long = "device-b", short = 'b')]
+    device_b: String,
 
     /// number of test packages
     #[clap(long = "package-number", short = 'n', default_value = "1000")]
@@ -34,10 +28,30 @@ struct Args {
     package_length: usize,
 }
 
+fn create(device_url: Url) -> Result<Box<dyn Device>> {
+    if device_url.scheme() == "serial" {
+        let list: Vec<&str> = device_url.path().split(':').collect();
+        Ok(Box::new(serialdevice::SerialDevice::create(
+            list[0],
+            list[1].parse()?,
+        )?))
+    } else if device_url.scheme() == "udp" {
+        Ok(Box::new(udpdevice::UdpDevice::create("", "")?))
+    } else {
+        Err(anyhow!("invalid url"))
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
-    println!("listener: {}", args.listener_port);
-    println!("sender: {}", args.sender_port);
+
+    println!("Device A: {}", args.device_a);
+    let device_a_url = Url::parse(&args.device_a)?;
+    let _a = create(device_a_url)?;
+
+    println!("Device B: {}", args.device_b);
+    let device_b_url = Url::parse(&args.device_b)?;
+    let _b = create(device_b_url)?;
 
     // let sender = workers::create_worker(&args.sender_port).unwrap();
     // let listener = workers::create_worker(&args.listener_port).unwrap();

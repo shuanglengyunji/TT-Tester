@@ -32,10 +32,10 @@ impl Device for SerialDevice {
 }
 
 impl SerialDevice {
-    fn create(device: &str, baud_rate: u32) -> Result<SerialDevice> {
+    pub fn create(device: &str, baud_rate: u32) -> Result<SerialDevice> {
         let serialport = serialport::new(device, baud_rate)
             .open()
-            .with_context(|| "Failed to open serialport")?;
+            .with_context(|| format!("Failed to open serialport device {} with baud rate {}", device, baud_rate))?;
         let mut serialport_tx = serialport.try_clone()?;
         let mut serialport_rx = serialport.try_clone()?;
 
