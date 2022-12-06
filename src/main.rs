@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use clap::Parser;
+use clap::{Arg, Command, Parser, ArgMatches};
 use device::Device;
 use url::Url;
 
@@ -43,15 +43,25 @@ fn create(device_url: Url) -> Result<Box<dyn Device>> {
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    // let args = Args::parse();
+    let m = Command::new("TT Tester")
+        .author("Han.Liu, liuhan211211@gmail.com")
+        .version(clap::crate_version!())
+        .about("Speed and package drop tester for transparent transmission between serial port, tcp and udp devices")
+        .arg(Arg::new("device").short('d').long("device").help("Specify device"))
+        .after_help(
+            "Longer explanation to appear after the options when \
+                 displaying the help information from --help or -h",
+        )
+        .get_matches();
 
-    println!("Device A: {}", args.device_a);
-    let device_a_url = Url::parse(&args.device_a)?;
-    let _a = create(device_a_url)?;
+    // println!("Device A: {}", args.device_a);
+    // let device_a_url = Url::parse(&args.device_a)?;
+    // let _a = create(device_a_url)?;
 
-    println!("Device B: {}", args.device_b);
-    let device_b_url = Url::parse(&args.device_b)?;
-    let _b = create(device_b_url)?;
+    // println!("Device B: {}", args.device_b);
+    // let device_b_url = Url::parse(&args.device_b)?;
+    // let _b = create(device_b_url)?;
 
     // let sender = workers::create_worker(&args.sender_port).unwrap();
     // let listener = workers::create_worker(&args.listener_port).unwrap();
