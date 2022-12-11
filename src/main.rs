@@ -1,114 +1,156 @@
-use anyhow::{anyhow, Result};
-use clap::{Arg, Command, Parser, ArgMatches};
-use device::Device;
-use url::Url;
+use core::time;
+use std::{
+    io::{Read, Write},
+    net::TcpStream,
+    string, thread,
+};
 
-mod device;
-mod serialdevice;
-mod udpdevice;
+use signal_hook::{consts::SIGINT, iterator::Signals};
 
-/// A speed and loss rate tester for transparent bridge between tcp, udp and serial port
-#[derive(Parser, Debug)]
-#[clap(author, version, about)]
-struct Args {
-    /// url of device a
-    #[clap(long = "device-a", short = 'a')]
-    device_a: String,
-
-    /// url of device b
-    #[clap(long = "device-b", short = 'b')]
-    device_b: String,
-
-    /// number of test packages
-    #[clap(long = "package-number", short = 'n', default_value = "1000")]
-    package_num: usize,
-
-    /// length of each package
-    #[clap(long = "package-length", short = 'p', default_value = "100")]
-    package_length: usize,
-}
-
-fn create(device_url: Url) -> Result<Box<dyn Device>> {
-    if device_url.scheme() == "serial" {
-        let list: Vec<&str> = device_url.path().split(':').collect();
-        Ok(Box::new(serialdevice::SerialDevice::create(
-            list[0],
-            list[1].parse()?,
-        )?))
-    } else if device_url.scheme() == "udp" {
-        Ok(Box::new(udpdevice::UdpDevice::create("", "")?))
-    } else {
-        Err(anyhow!("invalid url"))
-    }
-}
+use anyhow::{anyhow, Context, Result};
+use bus::Bus;
+use clap::{Arg, Command};
 
 fn main() -> Result<()> {
     // let args = Args::parse();
-    let m = Command::new("TT Tester")
+    let m = Command::new("ser2tcp-tester")
         .author("Han.Liu, liuhan211211@gmail.com")
         .version(clap::crate_version!())
-        .about("Speed and package drop tester for transparent transmission between serial port, tcp and udp devices")
-        .arg(Arg::new("device").short('d').long("device").help("Specify device"))
-        .after_help(
-            "Longer explanation to appear after the options when \
-                 displaying the help information from --help or -h",
-        )
+        .about("Speed tester for transparent transmission between tcp and serial port")
+        // .arg(
+        //     Arg::new("serial")
+        //         .required(true)
+        //         .short('s')
+        //         .long("serial")
+        //         .value_name("DEVICE:BAUD_RATE")
+        //         .help("Serial port device, for example: /dev/ttyUSB0:115200 (Linux) or COM1:115200 (Windows)"),
+        // )
+        // .arg(
+        //     Arg::new("tcp")
+        //         .short('t')
+        //         .required(true)
+        //         .long("tcp")
+        //         .value_name("ADDRESS:PORT")
+        //         .help("Tcp port, for example: 192.168.7.1:8000"),
+        // )
         .get_matches();
 
-    // println!("Device A: {}", args.device_a);
-    // let device_a_url = Url::parse(&args.device_a)?;
-    // let _a = create(device_a_url)?;
+    let mut stop_signal: Bus<u8> = Bus::new(1);
+    let mut stop_signal_reader_1 = stop_signal.add_rx();
+    let mut stop_signal_reader_2 = stop_signal.add_rx();
+    let mut stop_signal_reader_3 = stop_signal.add_rx();
+    let mut stop_signal_reader_4 = stop_signal.add_rx();
 
-    // println!("Device B: {}", args.device_b);
-    // let device_b_url = Url::parse(&args.device_b)?;
-    // let _b = create(device_b_url)?;
+    //#######################################################################################
+    //                                        TCP
+    //#######################################################################################
 
-    // let sender = workers::create_worker(&args.sender_port).unwrap();
-    // let listener = workers::create_worker(&args.listener_port).unwrap();
+    let remote_ip = "127.0.0.1:2000";
+    let tcp = TcpStream::connect(remote_ip)
+        .with_context(|| format!("Failed to connect to remote_ip {}", remote_ip))?;
+    tcp.set_nodelay(true)?; // no write package grouping
+    tcp.set_write_timeout(None)?; // blocking write
+    tcp.set_read_timeout(None)?; // blocking read
 
-    // println!("Testing...");
-    // let start = Instant::now();
-    // for i in 0..args.package_num {
-    //     let pkg = vec![i as u8; args.package_length];
-    //     // println!("[dispatcher_thread]  release pkg: {:?}", pkg.clone());
+    let mut tcp_tx = tcp.try_clone()?;
+    let mut tcp_rx = tcp.try_clone()?;
 
-    //     sender.send(pkg.clone(), None).unwrap();
-    //     let received = listener.receive(Some(Duration::from_millis(10))).unwrap();
+    // tcp tx
+    let handle_tcp_tx = thread::spawn(move || {
+        println!("tcp tx starts");
+        loop {
+            if let Ok(size) = tcp_tx.write(b"test") {
+                // assert_eq!(size, 1);
+            } else {
+                assert!(false);
+            }
+            if stop_signal_reader_1.try_recv().is_ok() {
+                break;
+            }
+            thread::sleep(time::Duration::from_millis(10));
+        }
+        println!("tcp tx stopped");
+    });
 
-    //     assert_eq!(received, pkg);
-    //     // println!("[dispatcher_thread] pkg verified");
-    // }
-    // let duration = start.elapsed();
-    // println!("Result:");
-    // println!(
-    //     "   Transferred {} packages ({} bytes) in {} seconds",
-    //     args.package_num,
-    //     args.package_num * args.package_length,
-    //     duration.as_secs_f32()
-    // );
-    // println!(
-    //     "   Pacakges rate: {:.2} package per second",
-    //     args.package_num as f64 / duration.as_secs_f64()
-    // );
-    // println!(
-    //     "   Data rate: {:.2} byte per second",
-    //     args.package_num as f64 * args.package_length as f64 / duration.as_secs_f64()
-    // );
+    // // tcp rx
+    // thread::spawn(move || {
+    //     println!("tcp rx starts");
+    //     {
+    //         let mut buf = [0u8; 2048]; // max 2k
+    //         loop {
+    //             if let Ok(size) = tcp_rx.read(&mut buf) {
+    //                 for i in 0..size {
+    //                     assert_eq!(buf[i], 1); // validate
+    //                 }
+    //             } else {
+    //                 assert!(false); // error, should not goes here
+    //             }
+    //             if stop_signal_reader_2.try_recv().is_ok() {
+    //                 break;
+    //             }
+    //         }
+    //     }
+    //     println!("tcp rx stopped");
+    // });
+
+    //#######################################################################################
+    //                                        SERIAL
+    //#######################################################################################
+
+    let device = "/tmp/serial2";
+    let baud_rate = 115200;
+    let serialport = serialport::new(device, baud_rate).open().with_context(|| {
+        format!(
+            "Failed to open serialport device {} with baud rate {}",
+            device, baud_rate
+        )
+    })?;
+    let mut serialport_tx = serialport.try_clone()?;
+    let mut serialport_rx = serialport.try_clone()?;
+
+    // // serial tx
+    // thread::spawn(move || loop {
+    //     // if let Ok(pkg) = sender_rx.try_recv() {
+    //     //     serialport_tx.write(&pkg).unwrap();
+    //     // }
+    //     if stop_signal_reader_3.try_recv().is_ok() {
+    //         break;
+    //     }
+    // });
+
+    // serial rx
+    let handle_serial_rx = thread::spawn(move || {
+        let mut buf = [0u8; 2048]; // max 2k
+
+        println!("serial rx starts");
+        loop {
+            // if let Ok(size) = serialport_rx.read(&mut buf) {
+            //     receiver_tx.send(buf[..size].to_vec()).unwrap();
+            // }
+            if let Ok(n) = serialport_rx.read(&mut buf[..]) {
+                println!("Received: {:?}", std::str::from_utf8(&buf[..n]));
+            }
+
+            if stop_signal_reader_4.try_recv().is_ok() {
+                break;
+            }
+            thread::sleep(time::Duration::from_millis(10));
+        }
+        println!("serial rx stopped");
+    });
+
+    let mut signals = Signals::new(&[SIGINT])?;
+    for sig in signals.forever() {
+        println!("\n===== Received signal {:?} =====", sig);
+        break;
+    }
+
+    stop_signal.broadcast(0);
+    handle_tcp_tx.join().unwrap();
+    handle_serial_rx.join().unwrap();
 
     Ok(())
 }
 
 #[cfg(test)]
-mod test {
-    use crate::port_validator;
-
-    #[test]
-    fn test_port_validator_with_valid_port() {
-        assert!(port_validator("udp,,").is_ok());
-    }
-
-    #[test]
-    fn test_port_validator_with_invalid_port() {
-        assert!(port_validator("invalid,,").is_err());
-    }
-}
+mod test {}

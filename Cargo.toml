@@ -1,5 +1,5 @@
 [package]
-name = "bridge-tester"
+name = "ser2tcp-tester"
 version = "0.1.0"
 edition = "2021"
 authors = ["Han Liu <liuhan211211@gmail.com>"]
@@ -13,3 +13,4 @@ serialport = "4.2.0"
 bus = "2.3.0"
 test-context = "0.1.4"
 url = "2.3.1"
+signal-hook = "0.3.14"
