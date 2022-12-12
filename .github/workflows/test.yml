@@ -1,4 +1,4 @@
-name: CI
+name: test
 
 on:
   [push]
@@ -11,11 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Install library
-      run: sudo apt-get install -y libudev-dev socat
+
     - name: Create virtual serial ports
-      run: tools/create_serial_port_pair.sh &
+      run: |
+        sudo apt update && sudo apt install -y libudev-dev socat ser2net
+        chmod +x tools/create_virtual_device.sh && tools/create_virtual_device.sh &
+
     - name: Build
       run: cargo build
+
     - name: Test
       run: RUST_BACKTRACE=1 cargo test -- --test-threads 1
