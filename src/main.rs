@@ -1,90 +1,194 @@
-use anyhow::Result;
-use clap::Parser;
+use core::time;
+use std::{
+    io::{Read, Write},
+    net::TcpStream,
+    thread::{self},
+};
 
-mod device;
-mod serialdevice;
-mod udpdevice;
+use signal_hook::{consts::SIGINT, iterator::Signals};
 
-fn port_validator(v: &str) -> Result<(), String> {
-    if v.starts_with("tcp") || v.starts_with("udp") || v.starts_with("serial") {
-        Ok(())
-    } else {
-        Err(String::from("Port invalid"))
+use anyhow::{Context, Result};
+use bus::Bus;
+use clap::{Arg, Command};
+
+struct TcpDevice {
+    stop_signal: Bus<u8>,
+}
+
+impl TcpDevice {
+    fn create(config: &str) -> Result<TcpDevice> {
+        let tcp = TcpStream::connect(config)
+            .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
+        tcp.set_nodelay(true)?; // no write package grouping
+        tcp.set_write_timeout(None)?; // blocking write
+        tcp.set_read_timeout(None)?; // blocking read
+
+        let mut tcp_tx = tcp.try_clone()?;
+        let mut tcp_rx = tcp.try_clone()?;
+
+        let mut stop_signal: Bus<u8> = Bus::new(1);
+        let mut stop_tx = stop_signal.add_rx();
+        let mut stop_rx = stop_signal.add_rx();
+
+        // tcp tx
+        thread::spawn(move || {
+            println!("tcp tx starts");
+            loop {
+                let n = tcp_tx.write(b"test").unwrap();
+                assert_eq!(n, 4);
+
+                if stop_tx.try_recv().is_ok() {
+                    break;
+                }
+                thread::sleep(time::Duration::from_millis(10));
+            }
+            println!("tcp tx stopped");
+        });
+
+        // tcp rx
+        thread::spawn(move || {
+            let mut buf = [0u8; 2048]; // max 2k
+            println!("tcp rx starts");
+            loop {
+                if let Ok(n) = tcp_rx.read(&mut buf) {
+                    println!("TCP Received: {:?}", std::str::from_utf8(&buf[..n]));
+                }
+
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                thread::sleep(time::Duration::from_millis(10));
+            }
+            println!("tcp rx stopped");
+        });
+
+        Ok(TcpDevice { stop_signal })
+    }
+
+    fn stop(&mut self) {
+        self.stop_signal.broadcast(0);
     }
 }
 
-/// A speed and loss rate tester for transparent bridge between tcp, udp and serial port
-#[derive(Parser, Debug)]
-#[clap(author, version, about)]
-struct Args {
-    /// listener port in format: type,local,remote
-    #[clap(long = "listener", short = 'l', validator(port_validator))]
-    listener_port: String,
+struct SerialDevice {
+    stop_signal: Bus<u8>,
+}
 
-    /// sender port in format: type,local,remote
-    #[clap(long = "sender", short = 's', validator(port_validator))]
-    sender_port: String,
+impl SerialDevice {
+    fn create(config: &str) -> Result<SerialDevice> {
+        let mut serial_iter = config.split(':');
+        let device = serial_iter.next().unwrap();
+        let baud_rate = serial_iter.next().unwrap().parse::<u32>().unwrap();
 
-    /// number of test packages
-    #[clap(long = "package-number", short = 'n', default_value = "1000")]
-    package_num: usize,
+        let mut stop_signal: Bus<u8> = Bus::new(1);
+        let mut stop_tx = stop_signal.add_rx();
+        let mut stop_rx = stop_signal.add_rx();
 
-    /// length of each package
-    #[clap(long = "package-length", short = 'p', default_value = "100")]
-    package_length: usize,
+        let serialport = serialport::new(device, baud_rate).open().with_context(|| {
+            format!(
+                "Failed to open serialport device {} with baud rate {}",
+                device, baud_rate
+            )
+        })?;
+        let mut serialport_tx = serialport.try_clone()?;
+        let mut serialport_rx = serialport.try_clone()?;
+
+        // serial tx
+        thread::spawn(move || {
+            println!("serial tx starts");
+            loop {
+                let n = serialport_tx.write(b"test").unwrap();
+                assert_eq!(n, 4);
+
+                if stop_tx.try_recv().is_ok() {
+                    break;
+                }
+                thread::sleep(time::Duration::from_millis(10));
+            }
+            println!("serial tx stopped");
+        });
+
+        // serial rx
+        thread::spawn(move || {
+            let mut buf = [0u8; 2048]; // max 2k
+            println!("serial rx starts");
+            loop {
+                if let Ok(n) = serialport_rx.read(&mut buf[..]) {
+                    println!("Serial Received: {:?}", std::str::from_utf8(&buf[..n]));
+                }
+
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                thread::sleep(time::Duration::from_millis(10));
+            }
+            println!("serial rx stopped");
+        });
+
+        Ok(SerialDevice { stop_signal })
+    }
+
+    fn stop(&mut self) {
+        self.stop_signal.broadcast(0);
+    }
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
-    println!("listener: {}", args.listener_port);
-    println!("sender: {}", args.sender_port);
+    let m = Command::new("ser2tcp-tester")
+        .version(clap::crate_version!())
+        .about("Speed tester for transparent transmission between tcp and serial port")
+        .arg(
+            Arg::new("serial")
+                // .required(true)
+                .short('s')
+                .long("serial")
+                .value_name("DEVICE:BAUD_RATE")
+                .help("Serial port device, for example: /dev/ttyUSB0:115200 (Linux) or COM1:115200 (Windows)"),
+        )
+        .arg(
+            Arg::new("tcp")
+                .short('t')
+                .required(true)
+                .long("tcp")
+                .value_name("ADDRESS:PORT")
+                .help("Tcp port, for example: 192.168.7.1:8000"),
+        )
+        .get_matches();
 
-    // let sender = workers::create_worker(&args.sender_port).unwrap();
-    // let listener = workers::create_worker(&args.listener_port).unwrap();
+    let mut tcp_device =
+        TcpDevice::create(m.get_one::<String>("tcp").expect("tcp config is required"))?;
+    let mut serial_device = SerialDevice::create(
+        m.get_one::<String>("serial")
+            .expect("serial config is required"),
+    )?;
 
-    // println!("Testing...");
-    // let start = Instant::now();
-    // for i in 0..args.package_num {
-    //     let pkg = vec![i as u8; args.package_length];
-    //     // println!("[dispatcher_thread]  release pkg: {:?}", pkg.clone());
+    let mut signals = Signals::new(&[SIGINT])?;
+    signals.wait();
 
-    //     sender.send(pkg.clone(), None).unwrap();
-    //     let received = listener.receive(Some(Duration::from_millis(10))).unwrap();
-
-    //     assert_eq!(received, pkg);
-    //     // println!("[dispatcher_thread] pkg verified");
-    // }
-    // let duration = start.elapsed();
-    // println!("Result:");
-    // println!(
-    //     "   Transferred {} packages ({} bytes) in {} seconds",
-    //     args.package_num,
-    //     args.package_num * args.package_length,
-    //     duration.as_secs_f32()
-    // );
-    // println!(
-    //     "   Pacakges rate: {:.2} package per second",
-    //     args.package_num as f64 / duration.as_secs_f64()
-    // );
-    // println!(
-    //     "   Data rate: {:.2} byte per second",
-    //     args.package_num as f64 * args.package_length as f64 / duration.as_secs_f64()
-    // );
+    tcp_device.stop();
+    serial_device.stop();
 
     Ok(())
 }
 
 #[cfg(test)]
 mod test {
-    use crate::port_validator;
+    use core::time;
+    use std::thread;
+
+    use crate::{SerialDevice, TcpDevice};
 
     #[test]
-    fn test_port_validator_with_valid_port() {
-        assert!(port_validator("udp,,").is_ok());
+    fn test_serial_device() {
+        let mut dev = SerialDevice::create("/tmp/serial2:115200").unwrap();
+        thread::sleep(time::Duration::from_millis(2000));
+        dev.stop();
     }
 
     #[test]
-    fn test_port_validator_with_invalid_port() {
-        assert!(port_validator("invalid,,").is_err());
+    fn test_tcp_device() {
+        let mut dev = TcpDevice::create("127.0.0.1:2000").unwrap();
+        thread::sleep(time::Duration::from_millis(2000));
+        dev.stop();
     }
 }

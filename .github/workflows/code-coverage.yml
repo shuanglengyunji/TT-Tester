@@ -12,21 +12,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Install stable toolchain
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - name: Install library
-        run: sudo apt-get install -y libudev-dev socat
+
       - name: Create virtual serial ports
-        run: tools/create_serial_port_pair.sh &
+        run: |
+          sudo apt update && sudo apt install -y libudev-dev socat ser2net
+          chmod +x tools/create_virtual_device.sh && tools/create_virtual_device.sh &
+
       - name: Run cargo-tarpaulin
         uses: actions-rs/tarpaulin@v0.1
         with:
           args: '-- --test-threads 1'
+
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v2
+
       - name: Archive code coverage results
         uses: actions/upload-artifact@v3
         with:
