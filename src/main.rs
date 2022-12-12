@@ -14,7 +14,6 @@ use clap::{Arg, Command};
 fn main() -> Result<()> {
     // let args = Args::parse();
     let m = Command::new("ser2tcp-tester")
-        .author("Han.Liu, liuhan211211@gmail.com")
         .version(clap::crate_version!())
         .about("Speed tester for transparent transmission between tcp and serial port")
         .arg(
