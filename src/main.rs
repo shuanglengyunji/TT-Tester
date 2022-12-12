@@ -12,7 +12,6 @@ use bus::Bus;
 use clap::{Arg, Command};
 
 fn main() -> Result<()> {
-    // let args = Args::parse();
     let m = Command::new("ser2tcp-tester")
         .version(clap::crate_version!())
         .about("Speed tester for transparent transmission between tcp and serial port")
@@ -27,7 +26,7 @@ fn main() -> Result<()> {
         .arg(
             Arg::new("tcp")
                 .short('t')
-                // .required(true)
+                .required(true)
                 .long("tcp")
                 .value_name("ADDRESS:PORT")
                 .help("Tcp port, for example: 192.168.7.1:8000"),
@@ -40,13 +39,23 @@ fn main() -> Result<()> {
     let mut stop_signal_reader_3 = stop_signal.add_rx();
     let mut stop_signal_reader_4 = stop_signal.add_rx();
 
+    let tcp_addr = m.get_one::<String>("tcp").unwrap();
+    let mut serial_iter = m.get_one::<String>("serial").unwrap().split(':');
+    let serial_device = serial_iter.next().unwrap();
+    let serial_baud_rate = serial_iter.next().unwrap().parse::<u32>().unwrap();
+
+    println!("tcp_addr: {:?}", tcp_addr);
+    println!(
+        "serial_device: {:?}, serial_baud_rate: {:?}",
+        serial_device, serial_baud_rate
+    );
+
     //#######################################################################################
     //                                        TCP
     //#######################################################################################
 
-    let remote_ip = "127.0.0.1:2000";
-    let tcp = TcpStream::connect(remote_ip)
-        .with_context(|| format!("Failed to connect to remote_ip {}", remote_ip))?;
+    let tcp = TcpStream::connect(tcp_addr)
+        .with_context(|| format!("Failed to connect to remote_ip {}", tcp_addr))?;
     tcp.set_nodelay(true)?; // no write package grouping
     tcp.set_write_timeout(None)?; // blocking write
     tcp.set_read_timeout(None)?; // blocking read
@@ -90,14 +99,14 @@ fn main() -> Result<()> {
     //                                        SERIAL
     //#######################################################################################
 
-    let device = "/tmp/serial2";
-    let baud_rate = 115200;
-    let serialport = serialport::new(device, baud_rate).open().with_context(|| {
-        format!(
-            "Failed to open serialport device {} with baud rate {}",
-            device, baud_rate
-        )
-    })?;
+    let serialport = serialport::new(serial_device, serial_baud_rate)
+        .open()
+        .with_context(|| {
+            format!(
+                "Failed to open serialport device {} with baud rate {}",
+                serial_device, serial_baud_rate
+            )
+        })?;
     let mut serialport_tx = serialport.try_clone()?;
     let mut serialport_rx = serialport.try_clone()?;
 
