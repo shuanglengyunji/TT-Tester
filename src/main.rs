@@ -23,7 +23,7 @@ impl TcpDevice {
             .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
         tcp.set_nodelay(true)?; // no write package grouping
         tcp.set_write_timeout(None)?; // blocking write
-        tcp.set_read_timeout(None)?; // blocking read
+        tcp.set_read_timeout(Some(time::Duration::from_millis(10)))?; // unblocking read
 
         let mut tcp_tx = tcp.try_clone()?;
         let mut tcp_rx = tcp.try_clone()?;
@@ -197,14 +197,14 @@ mod test {
     #[test]
     fn test_serial_device() {
         let mut dev = SerialDevice::create("/tmp/serial2:115200").unwrap();
-        thread::sleep(time::Duration::from_millis(2000));
+        thread::sleep(time::Duration::from_secs(1));
         dev.stop();
     }
 
     #[test]
     fn test_tcp_device() {
         let mut dev = TcpDevice::create("127.0.0.1:2000").unwrap();
-        thread::sleep(time::Duration::from_millis(2000));
+        thread::sleep(time::Duration::from_secs(1));
         dev.stop();
     }
 }
