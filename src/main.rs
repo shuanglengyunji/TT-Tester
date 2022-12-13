@@ -2,7 +2,7 @@ use core::time;
 use std::{
     io::{Read, Write},
     net::TcpStream,
-    thread::{self},
+    thread::{self, JoinHandle},
 };
 
 use signal_hook::{consts::SIGINT, iterator::Signals};
@@ -13,6 +13,8 @@ use clap::{Arg, Command};
 
 struct TcpDevice {
     stop_signal: Bus<u8>,
+    tx: Option<JoinHandle<()>>,
+    rx: Option<JoinHandle<()>>,
 }
 
 impl TcpDevice {
@@ -31,7 +33,7 @@ impl TcpDevice {
         let mut stop_rx = stop_signal.add_rx();
 
         // tcp tx
-        thread::spawn(move || {
+        let tx = thread::spawn(move || {
             println!("tcp tx starts");
             loop {
                 let n = tcp_tx.write(b"test").unwrap();
@@ -46,7 +48,7 @@ impl TcpDevice {
         });
 
         // tcp rx
-        thread::spawn(move || {
+        let rx = thread::spawn(move || {
             let mut buf = [0u8; 2048]; // max 2k
             println!("tcp rx starts");
             loop {
@@ -62,16 +64,24 @@ impl TcpDevice {
             println!("tcp rx stopped");
         });
 
-        Ok(TcpDevice { stop_signal })
+        Ok(TcpDevice {
+            stop_signal,
+            tx: Some(tx),
+            rx: Some(rx),
+        })
     }
 
     fn stop(&mut self) {
         self.stop_signal.broadcast(0);
+        self.tx.take().unwrap().join().unwrap();
+        self.rx.take().unwrap().join().unwrap();
     }
 }
 
 struct SerialDevice {
     stop_signal: Bus<u8>,
+    tx: Option<JoinHandle<()>>,
+    rx: Option<JoinHandle<()>>,
 }
 
 impl SerialDevice {
@@ -94,7 +104,7 @@ impl SerialDevice {
         let mut serialport_rx = serialport.try_clone()?;
 
         // serial tx
-        thread::spawn(move || {
+        let tx = thread::spawn(move || {
             println!("serial tx starts");
             loop {
                 let n = serialport_tx.write(b"test").unwrap();
@@ -109,7 +119,7 @@ impl SerialDevice {
         });
 
         // serial rx
-        thread::spawn(move || {
+        let rx = thread::spawn(move || {
             let mut buf = [0u8; 2048]; // max 2k
             println!("serial rx starts");
             loop {
@@ -125,11 +135,17 @@ impl SerialDevice {
             println!("serial rx stopped");
         });
 
-        Ok(SerialDevice { stop_signal })
+        Ok(SerialDevice {
+            stop_signal,
+            tx: Some(tx),
+            rx: Some(rx),
+        })
     }
 
     fn stop(&mut self) {
         self.stop_signal.broadcast(0);
+        self.tx.take().unwrap().join().unwrap();
+        self.rx.take().unwrap().join().unwrap();
     }
 }
 
