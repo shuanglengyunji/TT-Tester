@@ -1,8 +1,8 @@
-use core::time;
 use std::{
     io::{Read, Write},
     net::TcpStream,
     thread::{self, JoinHandle},
+    time::{self, Duration},
 };
 
 use signal_hook::{consts::SIGINT, iterator::Signals};
@@ -18,7 +18,7 @@ struct TcpDevice {
 }
 
 impl TcpDevice {
-    fn create(config: &str) -> Result<TcpDevice> {
+    fn create(config: &str, bytes_per_second: usize, func: fn(usize) -> u8) -> Result<TcpDevice> {
         let tcp = TcpStream::connect(config)
             .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
         tcp.set_nodelay(true)?; // no write package grouping
@@ -34,15 +34,32 @@ impl TcpDevice {
 
         // tcp tx
         let tx = thread::spawn(move || {
+            let mut index = 0;
             println!("tcp tx starts");
             loop {
-                let n = tcp_tx.write(b"test").unwrap();
-                assert_eq!(n, 4);
+                let start = time::SystemTime::now();
 
                 if stop_tx.try_recv().is_ok() {
                     break;
                 }
-                thread::sleep(time::Duration::from_millis(10));
+
+                let bytes_per_100ms = bytes_per_second / 10;
+                let n = tcp_tx
+                    .write(
+                        &(index..(index + bytes_per_100ms))
+                            .map(func)
+                            .collect::<Vec<u8>>(),
+                    )
+                    .unwrap();
+                assert_eq!(n, bytes_per_100ms);
+                index = index + bytes_per_100ms;
+
+                let time_to_100ms = Duration::from_millis(100) - start.elapsed().unwrap();
+                if time_to_100ms > Duration::ZERO {
+                    thread::sleep(time_to_100ms)
+                } else {
+                    panic!("Data rate too high");
+                }
             }
             println!("tcp tx stopped");
         });
@@ -50,10 +67,17 @@ impl TcpDevice {
         // tcp rx
         let rx = thread::spawn(move || {
             let mut buf = [0u8; 2048]; // max 2k
+            let mut index = 0;
             println!("tcp rx starts");
             loop {
                 if let Ok(n) = tcp_rx.read(&mut buf) {
-                    println!("TCP Received: {:?}", std::str::from_utf8(&buf[..n]));
+                    buf[..n].iter().enumerate().for_each(|(i, x)| {
+                        if func(index + i) != *x {
+                            panic!("Mismatch data");
+                        }
+                    });
+                    index = index + n;
+                    println!("TCP index: {:?}", index);
                 }
 
                 if stop_rx.try_recv().is_ok() {
@@ -85,7 +109,11 @@ struct SerialDevice {
 }
 
 impl SerialDevice {
-    fn create(config: &str) -> Result<SerialDevice> {
+    fn create(
+        config: &str,
+        bytes_per_second: usize,
+        func: fn(usize) -> u8,
+    ) -> Result<SerialDevice> {
         let mut serial_iter = config.split(':');
         let device = serial_iter.next().unwrap();
         let baud_rate = serial_iter.next().unwrap().parse::<u32>().unwrap();
@@ -105,15 +133,32 @@ impl SerialDevice {
 
         // serial tx
         let tx = thread::spawn(move || {
+            let mut index = 0;
             println!("serial tx starts");
             loop {
-                let n = serialport_tx.write(b"test").unwrap();
-                assert_eq!(n, 4);
+                let start = time::SystemTime::now();
 
                 if stop_tx.try_recv().is_ok() {
                     break;
                 }
-                thread::sleep(time::Duration::from_millis(10));
+
+                let bytes_per_100ms = bytes_per_second / 10;
+                let n = serialport_tx
+                    .write(
+                        &(index..(index + bytes_per_100ms))
+                            .map(func)
+                            .collect::<Vec<u8>>(),
+                    )
+                    .unwrap();
+                assert_eq!(n, bytes_per_100ms);
+                index = index + bytes_per_100ms;
+
+                let time_to_100ms = Duration::from_millis(100) - start.elapsed().unwrap();
+                if time_to_100ms > Duration::ZERO {
+                    thread::sleep(time_to_100ms)
+                } else {
+                    panic!("Data rate too high");
+                }
             }
             println!("serial tx stopped");
         });
@@ -121,10 +166,17 @@ impl SerialDevice {
         // serial rx
         let rx = thread::spawn(move || {
             let mut buf = [0u8; 2048]; // max 2k
+            let mut index = 0;
             println!("serial rx starts");
             loop {
                 if let Ok(n) = serialport_rx.read(&mut buf[..]) {
-                    println!("Serial Received: {:?}", std::str::from_utf8(&buf[..n]));
+                    buf[..n].iter().enumerate().for_each(|(i, x)| {
+                        if func(index + i) != *x {
+                            panic!("Mismatch data");
+                        }
+                    });
+                    index = index + n;
+                    println!("Serial index: {:?}", index);
                 }
 
                 if stop_rx.try_recv().is_ok() {
@@ -171,11 +223,14 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
-    let mut tcp_device =
-        TcpDevice::create(m.get_one::<String>("tcp").expect("tcp config is required"))?;
+    let mut tcp_device = TcpDevice::create(
+        m.get_one::<String>("tcp").expect("tcp config is required"),
+        1440,
+        |_| 1,
+    )?;
     let mut serial_device = SerialDevice::create(
         m.get_one::<String>("serial")
-            .expect("serial config is required"),
+            .expect("serial config is required"), 1440, |_| 1
     )?;
 
     let mut signals = Signals::new(&[SIGINT])?;
@@ -196,14 +251,16 @@ mod test {
 
     #[test]
     fn test_serial_device() {
-        let mut dev = SerialDevice::create("/tmp/serial2:115200").unwrap();
+        // test with serial echo server at serial0
+        let mut dev = SerialDevice::create("/tmp/serial0:115200", 1440, |_| 1).unwrap();
         thread::sleep(time::Duration::from_secs(1));
         dev.stop();
     }
 
     #[test]
     fn test_tcp_device() {
-        let mut dev = TcpDevice::create("127.0.0.1:2000").unwrap();
+        // test with TCP echo server at port 2000
+        let mut dev = TcpDevice::create("127.0.0.1:2000", 1440, |_| 1).unwrap();
         thread::sleep(time::Duration::from_secs(1));
         dev.stop();
     }
