@@ -19,10 +19,12 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Create virtual serial ports
+      - name: Add virtual device
         run: |
-          sudo apt update && sudo apt install -y libudev-dev socat ser2net
-          chmod +x tools/create_virtual_device.sh && tools/create_virtual_device.sh &
+          sudo apt update
+          sudo apt install -y libudev-dev socat ser2net
+          chmod +x tools/start_virtual_device.sh
+          tools/start_virtual_device.sh
 
       - name: Run cargo-tarpaulin
         uses: actions-rs/tarpaulin@v0.1
@@ -37,3 +39,8 @@ jobs:
         with:
           name: code-coverage-report
           path: cobertura.xml
+
+      - name: Remove virtual device
+        run: |
+          chmod +x tools/stop_virtual_device.sh
+          tools/stop_virtual_device.sh
