@@ -188,36 +188,40 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
-    // let mut tcp_device = TcpDevice::create(
-    //     m.get_one::<String>("tcp").expect("tcp config is required"),
-    //     1440,
-    //     |_| 1,
-    // )?;
-    // let mut serial_device = SerialDevice::create(
-    //     m.get_one::<String>("serial")
-    //         .expect("serial config is required"),
-    //     1440,
-    //     |_| 1,
-    // )?;
+    let send_buf_1 = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
+    let rec_buf_1 = Arc::new(Mutex::new(Vec::<u8>::new()));
 
-    // let mut signals = Signals::new(&[SIGINT])?;
-    // signals.wait();
+    let send_buf_2 = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
+    let rec_buf_2 = Arc::new(Mutex::new(Vec::<u8>::new()));
 
-    // tcp_device.stop();
-    // serial_device.stop();
+    let mut tcp_device = TcpDevice::create(
+        m.get_one::<String>("tcp").expect("tcp config is required"),
+        send_buf_1,
+        rec_buf_1,
+    )?;
+    let mut serial_device = SerialDevice::create(
+        m.get_one::<String>("serial")
+            .expect("serial config is required"),
+        send_buf_2,
+        rec_buf_2,
+    )?;
+
+    let mut signals = Signals::new(&[SIGINT])?;
+    signals.wait();
+
+    tcp_device.stop();
+    serial_device.stop();
 
     Ok(())
 }
 
 #[cfg(test)]
 mod test {
-    use core::time;
+    use std::time;
     use std::{
         sync::{Arc, Mutex},
         thread,
     };
-
-    use serialport::new;
 
     use crate::{SerialDevice, TcpDevice};
 
