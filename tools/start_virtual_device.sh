@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # TCP ECHO (PORT 2000)
+socat -dd tcp-l:4000,fork exec:'/bin/cat' 1> /dev/null &
 socat -dd tcp-l:2000,fork exec:'/bin/cat' 1> /dev/null &
 
 # SERIAL ECHO
