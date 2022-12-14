@@ -244,8 +244,8 @@ mod test {
         let rec_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
         let rec_buf_clone = rec_buf.clone();
 
-        // test with TCP echo server at port 2000
-        let mut dev = TcpDevice::create("127.0.0.1:2000", send_buf, rec_buf).unwrap();
+        // test with TCP echo server at port 4000
+        let mut dev = TcpDevice::create("127.0.0.1:4000", send_buf, rec_buf).unwrap();
         thread::sleep(time::Duration::from_secs(1));
         assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
         dev.stop();
