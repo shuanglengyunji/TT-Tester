@@ -26,6 +26,9 @@ jobs:
           chmod +x tools/start_virtual_device.sh
           tools/start_virtual_device.sh
 
+      - name: Run cargo test
+        run: cargo test
+
       - name: Run cargo-tarpaulin
         uses: actions-rs/tarpaulin@v0.1
 
