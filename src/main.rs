@@ -1,6 +1,10 @@
 use std::{
     io::{Read, Write},
     net::TcpStream,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread::{self, JoinHandle},
     time::{self, Duration},
 };
@@ -8,17 +12,19 @@ use std::{
 use signal_hook::{consts::SIGINT, iterator::Signals};
 
 use anyhow::{Context, Result};
-use bus::Bus;
 use clap::{Arg, Command};
 
 struct TcpDevice {
-    stop_signal: Bus<u8>,
-    tx: Option<JoinHandle<()>>,
-    rx: Option<JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
 }
 
 impl TcpDevice {
-    fn create(config: &str, bytes_per_second: usize, func: fn(usize) -> u8) -> Result<TcpDevice> {
+    fn create(
+        config: &str,
+        send_vec: Arc<Mutex<Vec<u8>>>,
+        rec_vec: Arc<Mutex<Vec<u8>>>,
+    ) -> Result<TcpDevice> {
         let tcp = TcpStream::connect(config)
             .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
         tcp.set_nodelay(true)?; // no write package grouping
@@ -28,100 +34,74 @@ impl TcpDevice {
         let mut tcp_tx = tcp.try_clone()?;
         let mut tcp_rx = tcp.try_clone()?;
 
-        let mut stop_signal: Bus<u8> = Bus::new(1);
-        let mut stop_tx = stop_signal.add_rx();
-        let mut stop_rx = stop_signal.add_rx();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_tx = stop.clone();
+        let stop_rx = stop.clone();
+
+        let mut threads = Vec::new();
 
         // tcp tx
-        let tx = thread::spawn(move || {
-            let mut index = 0;
+        threads.push(thread::spawn(move || {
             println!("tcp tx starts");
             loop {
-                let start = time::SystemTime::now();
+                {
+                    let mut vec = send_vec.lock().unwrap();
+                    let n = tcp_tx.write(vec.as_ref()).unwrap();
+                    assert_eq!(n, vec.len());
+                    vec.clear();
+                }
 
-                if stop_tx.try_recv().is_ok() {
+                if stop_tx.load(Ordering::SeqCst) {
                     break;
                 }
-
-                let bytes_per_100ms = bytes_per_second / 10;
-                let n = tcp_tx
-                    .write(
-                        &(index..(index + bytes_per_100ms))
-                            .map(func)
-                            .collect::<Vec<u8>>(),
-                    )
-                    .unwrap();
-                assert_eq!(n, bytes_per_100ms);
-                index = index + bytes_per_100ms;
-
-                let time_to_100ms = Duration::from_millis(100) - start.elapsed().unwrap();
-                if time_to_100ms > Duration::ZERO {
-                    thread::sleep(time_to_100ms)
-                } else {
-                    panic!("Data rate too high");
-                }
+                thread::sleep(Duration::from_millis(1))
             }
             println!("tcp tx stopped");
-        });
+        }));
 
         // tcp rx
-        let rx = thread::spawn(move || {
+        threads.push(thread::spawn(move || {
             let mut buf = [0u8; 2048]; // max 2k
-            let mut index = 0;
             println!("tcp rx starts");
             loop {
                 if let Ok(n) = tcp_rx.read(&mut buf) {
-                    buf[..n].iter().enumerate().for_each(|(i, x)| {
-                        if func(index + i) != *x {
-                            println!("{:?} {:?} {:?} {:?}", index, i, x, func(index + i));
-                            panic!("Mismatch data");
-                        }
-                    });
-                    index = index + n;
-                    println!("TCP index: {:?}", index);
+                    let mut vec = rec_vec.lock().unwrap();
+                    vec.append(buf[0..n].to_vec().as_mut())
                 }
 
-                if stop_rx.try_recv().is_ok() {
+                if stop_rx.load(Ordering::SeqCst) {
                     break;
                 }
-                thread::sleep(time::Duration::from_millis(10));
+                thread::sleep(time::Duration::from_millis(1));
             }
             println!("tcp rx stopped");
-        });
+        }));
 
-        Ok(TcpDevice {
-            stop_signal,
-            tx: Some(tx),
-            rx: Some(rx),
-        })
+        Ok(TcpDevice { stop, threads })
     }
 
     fn stop(&mut self) {
-        self.stop_signal.broadcast(0);
-        self.tx.take().unwrap().join().unwrap();
-        self.rx.take().unwrap().join().unwrap();
+        self.stop.store(true, Ordering::SeqCst);
+        while let Some(t) = self.threads.pop() {
+            t.join().unwrap();
+        }
     }
 }
 
 struct SerialDevice {
-    stop_signal: Bus<u8>,
-    tx: Option<JoinHandle<()>>,
-    rx: Option<JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
 }
 
 impl SerialDevice {
     fn create(
         config: &str,
-        bytes_per_second: usize,
-        func: fn(usize) -> u8,
+        send_vec: Arc<Mutex<Vec<u8>>>,
+        rec_vec: Arc<Mutex<Vec<u8>>>,
     ) -> Result<SerialDevice> {
         let mut serial_iter = config.split(':');
         let device = serial_iter.next().unwrap();
         let baud_rate = serial_iter.next().unwrap().parse::<u32>().unwrap();
-
-        let mut stop_signal: Bus<u8> = Bus::new(1);
-        let mut stop_tx = stop_signal.add_rx();
-        let mut stop_rx = stop_signal.add_rx();
 
         let serialport = serialport::new(device, baud_rate).open().with_context(|| {
             format!(
@@ -132,73 +112,57 @@ impl SerialDevice {
         let mut serialport_tx = serialport.try_clone()?;
         let mut serialport_rx = serialport.try_clone()?;
 
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_tx = stop.clone();
+        let stop_rx = stop.clone();
+
+        let mut threads = Vec::new();
+
         // serial tx
-        let tx = thread::spawn(move || {
-            let mut index = 0;
+        threads.push(thread::spawn(move || {
             println!("serial tx starts");
             loop {
-                let start = time::SystemTime::now();
+                {
+                    let mut vec = send_vec.lock().unwrap();
+                    let n = serialport_tx.write(vec.as_ref()).unwrap();
+                    assert_eq!(n, vec.len());
+                    vec.clear();
+                }
 
-                if stop_tx.try_recv().is_ok() {
+                if stop_tx.load(Ordering::SeqCst) {
                     break;
                 }
-
-                let bytes_per_100ms = bytes_per_second / 10;
-                let n = serialport_tx
-                    .write(
-                        &(index..(index + bytes_per_100ms))
-                            .map(func)
-                            .collect::<Vec<u8>>(),
-                    )
-                    .unwrap();
-                assert_eq!(n, bytes_per_100ms);
-                index = index + bytes_per_100ms;
-
-                let time_to_100ms = Duration::from_millis(100) - start.elapsed().unwrap();
-                if time_to_100ms > Duration::ZERO {
-                    thread::sleep(time_to_100ms)
-                } else {
-                    panic!("Data rate too high");
-                }
+                thread::sleep(time::Duration::from_millis(1));
             }
             println!("serial tx stopped");
-        });
+        }));
 
         // serial rx
-        let rx = thread::spawn(move || {
+        threads.push(thread::spawn(move || {
             let mut buf = [0u8; 2048]; // max 2k
-            let mut index = 0;
             println!("serial rx starts");
             loop {
                 if let Ok(n) = serialport_rx.read(&mut buf[..]) {
-                    buf[..n].iter().enumerate().for_each(|(i, x)| {
-                        if func(index + i) != *x {
-                            panic!("Mismatch data");
-                        }
-                    });
-                    index = index + n;
-                    println!("Serial index: {:?}", index);
+                    let mut vec = rec_vec.lock().unwrap();
+                    vec.append(buf[0..n].to_vec().as_mut())
                 }
 
-                if stop_rx.try_recv().is_ok() {
+                if stop_rx.load(Ordering::SeqCst) {
                     break;
                 }
-                thread::sleep(time::Duration::from_millis(10));
+                thread::sleep(time::Duration::from_millis(1));
             }
             println!("serial rx stopped");
-        });
+        }));
 
-        Ok(SerialDevice {
-            stop_signal,
-            tx: Some(tx),
-            rx: Some(rx),
-        })
+        Ok(SerialDevice { stop, threads })
     }
 
     fn stop(&mut self) {
-        self.stop_signal.broadcast(0);
-        self.tx.take().unwrap().join().unwrap();
-        self.rx.take().unwrap().join().unwrap();
+        self.stop.store(true, Ordering::SeqCst);
+        while let Some(t) = self.threads.pop() {
+            t.join().unwrap();
+        }
     }
 }
 
@@ -224,23 +188,23 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
-    let mut tcp_device = TcpDevice::create(
-        m.get_one::<String>("tcp").expect("tcp config is required"),
-        1440,
-        |_| 1,
-    )?;
-    let mut serial_device = SerialDevice::create(
-        m.get_one::<String>("serial")
-            .expect("serial config is required"),
-        1440,
-        |_| 1,
-    )?;
+    // let mut tcp_device = TcpDevice::create(
+    //     m.get_one::<String>("tcp").expect("tcp config is required"),
+    //     1440,
+    //     |_| 1,
+    // )?;
+    // let mut serial_device = SerialDevice::create(
+    //     m.get_one::<String>("serial")
+    //         .expect("serial config is required"),
+    //     1440,
+    //     |_| 1,
+    // )?;
 
-    let mut signals = Signals::new(&[SIGINT])?;
-    signals.wait();
+    // let mut signals = Signals::new(&[SIGINT])?;
+    // signals.wait();
 
-    tcp_device.stop();
-    serial_device.stop();
+    // tcp_device.stop();
+    // serial_device.stop();
 
     Ok(())
 }
@@ -248,33 +212,59 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod test {
     use core::time;
-    use std::thread;
+    use std::{
+        sync::{Arc, Mutex},
+        thread,
+    };
+
+    use serialport::new;
 
     use crate::{SerialDevice, TcpDevice};
 
     #[test]
     fn test_serial_device() {
+        let send_buf = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
+        let rec_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let rec_buf_clone = rec_buf.clone();
+
         // test with serial echo server at /tmp/serial0
-        let mut dev = SerialDevice::create("/tmp/serial0:115200", 1440, |_| 1).unwrap();
+        let mut dev = SerialDevice::create("/tmp/serial0:115200", send_buf, rec_buf).unwrap();
         thread::sleep(time::Duration::from_secs(1));
+        assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
         dev.stop();
     }
 
     #[test]
     fn test_tcp_device() {
+        let send_buf = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
+        let rec_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let rec_buf_clone = rec_buf.clone();
+
         // test with TCP echo server at port 2000
-        let mut dev = TcpDevice::create("127.0.0.1:2000", 1440, |_| 1).unwrap();
+        let mut dev = TcpDevice::create("127.0.0.1:2000", send_buf, rec_buf).unwrap();
         thread::sleep(time::Duration::from_secs(1));
+        assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
         dev.stop();
     }
 
     #[test]
     fn test_tcp_and_serial() {
+        let send_buf = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
+        let rec_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let rec_buf_clone = rec_buf.clone();
+
         // tcp <> serial pass through between /tmp/serial1 and port 3000
-        let func = |x| x as u8;
-        let mut tcp = TcpDevice::create("127.0.0.1:3000", 1440, func).unwrap();
-        let mut ser = SerialDevice::create("/tmp/serial1:115200", 1440, func).unwrap();
+        let mut tcp =
+            TcpDevice::create("127.0.0.1:3000", send_buf, Arc::new(Mutex::new(Vec::new())))
+                .unwrap();
+        let mut ser = SerialDevice::create(
+            "/tmp/serial1:115200",
+            Arc::new(Mutex::new(Vec::new())),
+            rec_buf,
+        )
+        .unwrap();
         thread::sleep(time::Duration::from_secs(1));
+        assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
         tcp.stop();
         ser.stop();
     }
