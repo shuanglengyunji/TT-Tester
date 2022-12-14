@@ -73,6 +73,7 @@ impl TcpDevice {
                 if let Ok(n) = tcp_rx.read(&mut buf) {
                     buf[..n].iter().enumerate().for_each(|(i, x)| {
                         if func(index + i) != *x {
+                            println!("{:?} {:?} {:?} {:?}", index, i, x, func(index + i));
                             panic!("Mismatch data");
                         }
                     });
@@ -230,7 +231,9 @@ fn main() -> Result<()> {
     )?;
     let mut serial_device = SerialDevice::create(
         m.get_one::<String>("serial")
-            .expect("serial config is required"), 1440, |_| 1
+            .expect("serial config is required"),
+        1440,
+        |_| 1,
     )?;
 
     let mut signals = Signals::new(&[SIGINT])?;
@@ -251,7 +254,7 @@ mod test {
 
     #[test]
     fn test_serial_device() {
-        // test with serial echo server at serial0
+        // test with serial echo server at /tmp/serial0
         let mut dev = SerialDevice::create("/tmp/serial0:115200", 1440, |_| 1).unwrap();
         thread::sleep(time::Duration::from_secs(1));
         dev.stop();
@@ -263,5 +266,16 @@ mod test {
         let mut dev = TcpDevice::create("127.0.0.1:2000", 1440, |_| 1).unwrap();
         thread::sleep(time::Duration::from_secs(1));
         dev.stop();
+    }
+
+    #[test]
+    fn test_tcp_and_serial() {
+        // tcp <> serial pass through between /tmp/serial1 and port 3000
+        let func = |x| x as u8;
+        let mut tcp = TcpDevice::create("127.0.0.1:3000", 1440, func).unwrap();
+        let mut ser = SerialDevice::create("/tmp/serial1:115200", 1440, func).unwrap();
+        thread::sleep(time::Duration::from_secs(1));
+        tcp.stop();
+        ser.stop();
     }
 }
