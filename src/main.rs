@@ -55,13 +55,15 @@ impl Controller {
                 if stop_tx.load(Ordering::SeqCst) {
                     break;
                 }
-                thread::sleep(Duration::from_millis(1))
+                thread::sleep(Duration::from_nanos(1));
             }
             println!("controller tx stopped");
         }));
 
         threads.push(thread::spawn(move || {
             println!("controller rx starts");
+            let mut bytes = 0;
+            let mut begin = time::SystemTime::now();
             loop {
                 {
                     let mut data_received = rx_clone.lock().unwrap();
@@ -75,12 +77,18 @@ impl Controller {
                         if expected != received {
                             panic!("expected: {:?} received: {:?}", expected, received);
                         }
+                        bytes = bytes + 1;
                     }
                 }
                 if stop_rx.load(Ordering::SeqCst) {
                     break;
                 }
-                thread::sleep(Duration::from_millis(1))
+                if begin.elapsed().unwrap() >= time::Duration::from_secs(1) {
+                    println!("received {:?} bytes", bytes);
+                    bytes = 0;
+                    begin = time::SystemTime::now();
+                }
+                thread::sleep(Duration::from_nanos(1));
             }
             println!("controller rx stopped");
         }));
@@ -296,8 +304,8 @@ fn main() -> Result<()> {
     let mut serial_device = SerialDevice::create(
         m.get_one::<String>("serial")
             .expect("serial config is required"),
-            serial_to_tcp_controller.tx(),
-            tcp_to_serial_controller.rx(),
+        serial_to_tcp_controller.tx(),
+        tcp_to_serial_controller.rx(),
     )?;
 
     let mut signals = Signals::new(&[SIGINT])?;
