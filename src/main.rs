@@ -115,7 +115,11 @@ struct TcpDevice {
 }
 
 impl TcpDevice {
-    fn create(config: &str, tx: Arc<Mutex<Vec<u8>>>, rx: Arc<Mutex<Vec<u8>>>) -> Result<TcpDevice> {
+    fn create(
+        config: &str,
+        tx: Arc<Mutex<VecDeque<u8>>>,
+        rx: Arc<Mutex<VecDeque<u8>>>,
+    ) -> Result<TcpDevice> {
         let tcp = TcpStream::connect(config)
             .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
         tcp.set_nodelay(true)?; // no write package grouping
@@ -137,8 +141,12 @@ impl TcpDevice {
             loop {
                 {
                     let mut vec = tx.lock().unwrap();
-                    let n = tcp_tx.write(vec.as_ref()).unwrap();
-                    assert_eq!(n, vec.len());
+                    vec.make_contiguous();
+                    if let (slice, _) = vec.as_slices() {
+                        // we can now be sure that `slice` contains all elements of the deque,
+                        // while still having immutable access to `buf`.
+                        tcp_tx.write_all(slice).unwrap();
+                    }
                     vec.clear();
                 }
 
@@ -157,7 +165,7 @@ impl TcpDevice {
             loop {
                 if let Ok(n) = tcp_rx.read(&mut buf) {
                     let mut vec = rx.lock().unwrap();
-                    vec.append(buf[0..n].to_vec().as_mut())
+                    vec.extend(buf[0..n].iter());
                 }
 
                 if stop_rx.load(Ordering::SeqCst) {
@@ -279,17 +287,21 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
+    let tcp_to_serial_controller = Controller::create().unwrap();
+    let mut tcp_tx = tcp_to_serial_controller.tx();
+    let mut serial_rx = tcp_to_serial_controller.rx();
+
     let send_buf_1 = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
     let rec_buf_1 = Arc::new(Mutex::new(Vec::<u8>::new()));
 
     let send_buf_2 = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
     let rec_buf_2 = Arc::new(Mutex::new(Vec::<u8>::new()));
 
-    let mut tcp_device = TcpDevice::create(
-        m.get_one::<String>("tcp").expect("tcp config is required"),
-        send_buf_1,
-        rec_buf_1,
-    )?;
+    // let mut tcp_device = TcpDevice::create(
+    //     m.get_one::<String>("tcp").expect("tcp config is required"),
+    //     send_buf_1,
+    //     rec_buf_1,
+    // )?;
     let mut serial_device = SerialDevice::create(
         m.get_one::<String>("serial")
             .expect("serial config is required"),
@@ -300,7 +312,7 @@ fn main() -> Result<()> {
     let mut signals = Signals::new(&[SIGINT])?;
     signals.wait();
 
-    tcp_device.stop();
+    // tcp_device.stop();
     serial_device.stop();
 
     Ok(())
@@ -308,6 +320,7 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::VecDeque;
     use std::time;
     use std::{
         sync::{Arc, Mutex},
@@ -350,44 +363,51 @@ mod test {
 
     #[test]
     fn test_tcp_device() {
-        let send_buf = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
-        let rec_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let send_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let rec_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let send_buf_clone = rec_buf.clone();
         let rec_buf_clone = rec_buf.clone();
 
         // test with TCP echo server at port 4000
         let mut dev = TcpDevice::create("127.0.0.1:4000", send_buf, rec_buf).unwrap();
-        thread::sleep(time::Duration::from_secs(1));
-        assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
-        dev.stop();
-    }
-
-    #[ignore]
-    #[test]
-    fn test_tcp_and_serial() {
-        let send_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let rec_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let send_buf_clone = send_buf.clone();
-        let rec_buf_clone = rec_buf.clone();
-
-        // tcp <> serial pass through between /tmp/serial1 and port 3000
-        let mut tcp =
-            TcpDevice::create("127.0.0.1:3000", send_buf, Arc::new(Mutex::new(Vec::new())))
-                .unwrap();
-        let mut ser = SerialDevice::create(
-            "/tmp/serial1:115200",
-            Arc::new(Mutex::new(Vec::new())),
-            rec_buf,
-        )
-        .unwrap();
 
         send_buf_clone
             .lock()
             .unwrap()
-            .append(&mut vec![1_u8, 2, 3, 4, 5]);
-
+            .extend([1_u8, 2, 3, 4, 5].iter());
         thread::sleep(time::Duration::from_secs(1));
         assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
-        tcp.stop();
-        ser.stop();
+
+        dev.stop();
     }
+
+    // #[ignore]
+    // #[test]
+    // fn test_tcp_and_serial() {
+    //     let send_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    //     let rec_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    //     let send_buf_clone = send_buf.clone();
+    //     let rec_buf_clone = rec_buf.clone();
+
+    //     // tcp <> serial pass through between /tmp/serial1 and port 3000
+    //     let mut tcp =
+    //         TcpDevice::create("127.0.0.1:3000", send_buf, Arc::new(Mutex::new(Vec::new())))
+    //             .unwrap();
+    //     let mut ser = SerialDevice::create(
+    //         "/tmp/serial1:115200",
+    //         Arc::new(Mutex::new(Vec::new())),
+    //         rec_buf,
+    //     )
+    //     .unwrap();
+
+    //     send_buf_clone
+    //         .lock()
+    //         .unwrap()
+    //         .append(&mut vec![1_u8, 2, 3, 4, 5]);
+
+    //     thread::sleep(time::Duration::from_secs(1));
+    //     assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
+    //     tcp.stop();
+    //     ser.stop();
+    // }
 }
