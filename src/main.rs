@@ -285,8 +285,8 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
-    let tcp_to_serial_controller = Controller::create().unwrap();
-    let serial_to_tcp_controller = Controller::create().unwrap();
+    let mut tcp_to_serial_controller = Controller::create().unwrap();
+    let mut serial_to_tcp_controller = Controller::create().unwrap();
 
     let mut tcp_device = TcpDevice::create(
         m.get_one::<String>("tcp").expect("tcp config is required"),
@@ -303,6 +303,8 @@ fn main() -> Result<()> {
     let mut signals = Signals::new(&[SIGINT])?;
     signals.wait();
 
+    tcp_to_serial_controller.stop();
+    serial_to_tcp_controller.stop();
     tcp_device.stop();
     serial_device.stop();
 
