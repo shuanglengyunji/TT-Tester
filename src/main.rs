@@ -195,8 +195,8 @@ struct SerialDevice {
 impl SerialDevice {
     fn create(
         config: &str,
-        tx: Arc<Mutex<Vec<u8>>>,
-        rx: Arc<Mutex<Vec<u8>>>,
+        tx: Arc<Mutex<VecDeque<u8>>>,
+        rx: Arc<Mutex<VecDeque<u8>>>,
     ) -> Result<SerialDevice> {
         let mut serial_iter = config.split(':');
         let device = serial_iter.next().unwrap();
@@ -223,8 +223,12 @@ impl SerialDevice {
             loop {
                 {
                     let mut vec = tx.lock().unwrap();
-                    let n = serialport_tx.write(vec.as_ref()).unwrap();
-                    assert_eq!(n, vec.len());
+                    vec.make_contiguous();
+                    if let (slice, _) = vec.as_slices() {
+                        // we can now be sure that `slice` contains all elements of the deque,
+                        // while still having immutable access to `buf`.
+                        serialport_tx.write_all(slice).unwrap();
+                    }
                     vec.clear();
                 }
 
@@ -241,9 +245,9 @@ impl SerialDevice {
             let mut buf = [0u8; 2048]; // max 2k
             println!("serial rx starts");
             loop {
-                if let Ok(n) = serialport_rx.read(&mut buf[..]) {
+                if let Ok(n) = serialport_rx.read(&mut buf) {
                     let mut vec = rx.lock().unwrap();
-                    vec.append(buf[0..n].to_vec().as_mut())
+                    vec.extend(buf[0..n].iter());
                 }
 
                 if stop_rx.load(Ordering::SeqCst) {
@@ -302,18 +306,18 @@ fn main() -> Result<()> {
     //     send_buf_1,
     //     rec_buf_1,
     // )?;
-    let mut serial_device = SerialDevice::create(
-        m.get_one::<String>("serial")
-            .expect("serial config is required"),
-        send_buf_2,
-        rec_buf_2,
-    )?;
+    // let mut serial_device = SerialDevice::create(
+    //     m.get_one::<String>("serial")
+    //         .expect("serial config is required"),
+    //     send_buf_2,
+    //     rec_buf_2,
+    // )?;
 
     let mut signals = Signals::new(&[SIGINT])?;
     signals.wait();
 
     // tcp_device.stop();
-    serial_device.stop();
+    // serial_device.stop();
 
     Ok(())
 }
@@ -350,14 +354,21 @@ mod test {
 
     #[test]
     fn test_serial_device() {
-        let send_buf = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
-        let rec_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let send_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let rec_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let send_buf_clone = rec_buf.clone();
         let rec_buf_clone = rec_buf.clone();
 
         // test with serial echo server at /tmp/serial0
         let mut dev = SerialDevice::create("/tmp/serial0:115200", send_buf, rec_buf).unwrap();
+
+        send_buf_clone
+            .lock()
+            .unwrap()
+            .extend([1_u8, 2, 3, 4, 5].iter());
         thread::sleep(time::Duration::from_secs(1));
         assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
+
         dev.stop();
     }
 
