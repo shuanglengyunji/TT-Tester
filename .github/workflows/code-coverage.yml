@@ -30,7 +30,6 @@ jobs:
 
       - name: Add virtual device
         run: |
-          sudo apt update
           sudo apt install -y libudev-dev socat ser2net
           chmod +x tools/start_virtual_device.sh
           tools/start_virtual_device.sh
