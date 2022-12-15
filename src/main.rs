@@ -1,8 +1,10 @@
 use std::{
+    collections::VecDeque,
     io::{Read, Write},
     net::TcpStream,
     sync::{
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -14,17 +16,106 @@ use signal_hook::{consts::SIGINT, iterator::Signals};
 use anyhow::{Context, Result};
 use clap::{Arg, Command};
 
+struct Controller {
+    stop: Arc<AtomicBool>,
+    threads: Vec<JoinHandle<()>>,
+    tx: Arc<Mutex<VecDeque<u8>>>,
+    rx: Arc<Mutex<VecDeque<u8>>>,
+}
+
+impl Controller {
+    fn create() -> Result<Controller> {
+        let tx = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let rx = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let tx_clone = tx.clone();
+        let rx_clone = rx.clone();
+
+        let (sender, receiver): (Sender<u8>, Receiver<u8>) = mpsc::channel();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_tx = stop.clone();
+        let stop_rx = stop.clone();
+
+        let mut threads = Vec::new();
+
+        threads.push(thread::spawn(move || {
+            println!("controller tx starts");
+            let mut index = 0;
+            loop {
+                tx_clone.lock().unwrap().push_back(index);
+                if let Err(_) = sender.send(index) {
+                    if stop_tx.load(Ordering::SeqCst) {
+                        break;
+                    } else {
+                        panic!("Unable to send expected value to rx thread");
+                    }
+                }
+                (index, _) = index.overflowing_add(1);
+
+                if stop_tx.load(Ordering::SeqCst) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1))
+            }
+            println!("controller tx stopped");
+        }));
+
+        threads.push(thread::spawn(move || {
+            println!("controller rx starts");
+            loop {
+                {
+                    let mut data_received = rx_clone.lock().unwrap();
+                    while let Some(received) = data_received.pop_front() {
+                        let expected = loop {
+                            if let Ok(x) = receiver.recv_timeout(time::Duration::from_millis(10)) {
+                                break x;
+                            }
+                            thread::sleep(time::Duration::from_millis(1));
+                        };
+                        if expected != received {
+                            panic!("expected: {:?} received: {:?}", expected, received);
+                        }
+                    }
+                }
+                if stop_rx.load(Ordering::SeqCst) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1))
+            }
+            println!("controller rx stopped");
+        }));
+
+        Ok(Controller {
+            stop,
+            threads,
+            tx,
+            rx,
+        })
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        while let Some(t) = self.threads.pop() {
+            t.join().unwrap();
+        }
+    }
+
+    fn tx(&self) -> Arc<Mutex<VecDeque<u8>>> {
+        self.tx.clone()
+    }
+
+    fn rx(&self) -> Arc<Mutex<VecDeque<u8>>> {
+        self.rx.clone()
+    }
+}
+
 struct TcpDevice {
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
 }
 
 impl TcpDevice {
-    fn create(
-        config: &str,
-        send_vec: Arc<Mutex<Vec<u8>>>,
-        rec_vec: Arc<Mutex<Vec<u8>>>,
-    ) -> Result<TcpDevice> {
+    fn create(config: &str, tx: Arc<Mutex<Vec<u8>>>, rx: Arc<Mutex<Vec<u8>>>) -> Result<TcpDevice> {
         let tcp = TcpStream::connect(config)
             .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
         tcp.set_nodelay(true)?; // no write package grouping
@@ -45,7 +136,7 @@ impl TcpDevice {
             println!("tcp tx starts");
             loop {
                 {
-                    let mut vec = send_vec.lock().unwrap();
+                    let mut vec = tx.lock().unwrap();
                     let n = tcp_tx.write(vec.as_ref()).unwrap();
                     assert_eq!(n, vec.len());
                     vec.clear();
@@ -65,7 +156,7 @@ impl TcpDevice {
             println!("tcp rx starts");
             loop {
                 if let Ok(n) = tcp_rx.read(&mut buf) {
-                    let mut vec = rec_vec.lock().unwrap();
+                    let mut vec = rx.lock().unwrap();
                     vec.append(buf[0..n].to_vec().as_mut())
                 }
 
@@ -96,8 +187,8 @@ struct SerialDevice {
 impl SerialDevice {
     fn create(
         config: &str,
-        send_vec: Arc<Mutex<Vec<u8>>>,
-        rec_vec: Arc<Mutex<Vec<u8>>>,
+        tx: Arc<Mutex<Vec<u8>>>,
+        rx: Arc<Mutex<Vec<u8>>>,
     ) -> Result<SerialDevice> {
         let mut serial_iter = config.split(':');
         let device = serial_iter.next().unwrap();
@@ -123,7 +214,7 @@ impl SerialDevice {
             println!("serial tx starts");
             loop {
                 {
-                    let mut vec = send_vec.lock().unwrap();
+                    let mut vec = tx.lock().unwrap();
                     let n = serialport_tx.write(vec.as_ref()).unwrap();
                     assert_eq!(n, vec.len());
                     vec.clear();
@@ -143,7 +234,7 @@ impl SerialDevice {
             println!("serial rx starts");
             loop {
                 if let Ok(n) = serialport_rx.read(&mut buf[..]) {
-                    let mut vec = rec_vec.lock().unwrap();
+                    let mut vec = rx.lock().unwrap();
                     vec.append(buf[0..n].to_vec().as_mut())
                 }
 
@@ -223,7 +314,26 @@ mod test {
         thread,
     };
 
-    use crate::{SerialDevice, TcpDevice};
+    use crate::{Controller, SerialDevice, TcpDevice};
+
+    #[test]
+    fn test_controller() {
+        let mut controller = Controller::create().unwrap();
+        let tx = controller.tx();
+        let rx = controller.rx();
+
+        let start = time::SystemTime::now();
+        while start.elapsed().unwrap() < time::Duration::from_secs(1) {
+            {
+                let mut tx_data = tx.lock().unwrap();
+                let mut rx_data = rx.lock().unwrap();
+                rx_data.append(&mut tx_data);
+            }
+            thread::sleep(time::Duration::from_millis(20));
+        }
+
+        controller.stop();
+    }
 
     #[test]
     fn test_serial_device() {
@@ -251,7 +361,7 @@ mod test {
         dev.stop();
     }
 
-    // #[ignore = "github action runner loss data between tcp and serial"]
+    #[ignore]
     #[test]
     fn test_tcp_and_serial() {
         let send_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -270,7 +380,6 @@ mod test {
         )
         .unwrap();
 
-        thread::sleep(time::Duration::from_secs(1));
         send_buf_clone
             .lock()
             .unwrap()
