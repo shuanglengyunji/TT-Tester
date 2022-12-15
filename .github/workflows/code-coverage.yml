@@ -49,8 +49,3 @@ jobs:
         with:
           name: code-coverage-report
           path: cobertura.xml
-
-      - name: Remove virtual device
-        run: |
-          chmod +x tools/stop_virtual_device.sh
-          tools/stop_virtual_device.sh
