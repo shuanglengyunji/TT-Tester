@@ -142,11 +142,8 @@ impl TcpDevice {
                 {
                     let mut vec = tx.lock().unwrap();
                     vec.make_contiguous();
-                    if let (slice, _) = vec.as_slices() {
-                        // we can now be sure that `slice` contains all elements of the deque,
-                        // while still having immutable access to `buf`.
-                        tcp_tx.write_all(slice).unwrap();
-                    }
+                    let (slice, _) = vec.as_slices(); // we can now be sure that `slice` contains all elements of the deque, while still having immutable access to `buf`.
+                    tcp_tx.write_all(slice).unwrap();
                     vec.clear();
                 }
 
@@ -224,11 +221,8 @@ impl SerialDevice {
                 {
                     let mut vec = tx.lock().unwrap();
                     vec.make_contiguous();
-                    if let (slice, _) = vec.as_slices() {
-                        // we can now be sure that `slice` contains all elements of the deque,
-                        // while still having immutable access to `buf`.
-                        serialport_tx.write_all(slice).unwrap();
-                    }
+                    let (slice, _) = vec.as_slices(); // we can now be sure that `slice` contains all elements of the deque, while still having immutable access to `buf`.
+                    serialport_tx.write_all(slice).unwrap();
                     vec.clear();
                 }
 
@@ -292,32 +286,25 @@ fn main() -> Result<()> {
         .get_matches();
 
     let tcp_to_serial_controller = Controller::create().unwrap();
-    let mut tcp_tx = tcp_to_serial_controller.tx();
-    let mut serial_rx = tcp_to_serial_controller.rx();
+    let serial_to_tcp_controller = Controller::create().unwrap();
 
-    let send_buf_1 = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
-    let rec_buf_1 = Arc::new(Mutex::new(Vec::<u8>::new()));
-
-    let send_buf_2 = Arc::new(Mutex::new(vec![1_u8, 2, 3, 4, 5]));
-    let rec_buf_2 = Arc::new(Mutex::new(Vec::<u8>::new()));
-
-    // let mut tcp_device = TcpDevice::create(
-    //     m.get_one::<String>("tcp").expect("tcp config is required"),
-    //     send_buf_1,
-    //     rec_buf_1,
-    // )?;
-    // let mut serial_device = SerialDevice::create(
-    //     m.get_one::<String>("serial")
-    //         .expect("serial config is required"),
-    //     send_buf_2,
-    //     rec_buf_2,
-    // )?;
+    let mut tcp_device = TcpDevice::create(
+        m.get_one::<String>("tcp").expect("tcp config is required"),
+        tcp_to_serial_controller.tx(),
+        serial_to_tcp_controller.rx(),
+    )?;
+    let mut serial_device = SerialDevice::create(
+        m.get_one::<String>("serial")
+            .expect("serial config is required"),
+            serial_to_tcp_controller.tx(),
+            tcp_to_serial_controller.rx(),
+    )?;
 
     let mut signals = Signals::new(&[SIGINT])?;
     signals.wait();
 
-    // tcp_device.stop();
-    // serial_device.stop();
+    tcp_device.stop();
+    serial_device.stop();
 
     Ok(())
 }
