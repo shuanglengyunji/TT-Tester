@@ -362,30 +362,4 @@ mod test {
 
         dev.stop();
     }
-
-    #[test]
-    fn test_tcp_and_serial() {
-        let send_buf = Arc::new(Mutex::new(VecDeque::from([1_u8, 2, 3, 4, 5])));
-        let rec_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
-        let rec_buf_clone = rec_buf.clone();
-
-        // tcp <> serial pass through between /tmp/serial1 and port 3000
-        let mut tcp = TcpDevice::create(
-            "127.0.0.1:3000",
-            send_buf,
-            Arc::new(Mutex::new(VecDeque::new())),
-        )
-        .unwrap();
-        let mut ser = SerialDevice::create(
-            "/tmp/serial1:115200",
-            Arc::new(Mutex::new(VecDeque::new())),
-            rec_buf,
-        )
-        .unwrap();
-
-        thread::sleep(time::Duration::from_secs(1));
-        assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
-        tcp.stop();
-        ser.stop();
-    }
 }
