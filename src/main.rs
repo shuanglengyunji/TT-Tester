@@ -1,6 +1,5 @@
 use std::{
     collections::VecDeque,
-    io::{Read, Write},
     net::TcpStream,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -117,26 +116,18 @@ impl Controller {
     }
 }
 
-struct TcpDevice {
+struct GenericDevice {
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
 }
 
-impl TcpDevice {
-    fn create(
-        config: &str,
+impl GenericDevice {
+    fn create<T: std::io::Read + std::io::Write + std::marker::Send + 'static>(
+        mut tx_device: T,
+        mut rx_device: T,
         tx: Arc<Mutex<VecDeque<u8>>>,
         rx: Arc<Mutex<VecDeque<u8>>>,
-    ) -> Result<TcpDevice> {
-        let tcp = TcpStream::connect(config)
-            .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
-        tcp.set_nodelay(true)?; // no write package grouping
-        tcp.set_write_timeout(None)?; // blocking write
-        tcp.set_read_timeout(Some(time::Duration::from_millis(10)))?; // unblocking read
-
-        let mut tcp_tx = tcp.try_clone()?;
-        let mut tcp_rx = tcp.try_clone()?;
-
+    ) -> Result<GenericDevice> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_tx = stop.clone();
         let stop_rx = stop.clone();
@@ -151,7 +142,7 @@ impl TcpDevice {
                     let mut vec = tx.lock().unwrap();
                     vec.make_contiguous();
                     let (slice, _) = vec.as_slices(); // we can now be sure that `slice` contains all elements of the deque, while still having immutable access to `buf`.
-                    tcp_tx.write_all(slice).unwrap();
+                    tx_device.write_all(slice).unwrap();
                     vec.clear();
                 }
 
@@ -168,7 +159,7 @@ impl TcpDevice {
             let mut buf = [0u8; 2048]; // max 2k
             println!("tcp rx starts");
             loop {
-                if let Ok(n) = tcp_rx.read(&mut buf) {
+                if let Ok(n) = rx_device.read(&mut buf) {
                     let mut vec = rx.lock().unwrap();
                     vec.extend(buf[0..n].iter());
                 }
@@ -181,7 +172,7 @@ impl TcpDevice {
             println!("tcp rx stopped");
         }));
 
-        Ok(TcpDevice { stop, threads })
+        Ok(GenericDevice { stop, threads })
     }
 
     fn stop(&mut self) {
@@ -192,9 +183,34 @@ impl TcpDevice {
     }
 }
 
+struct TcpDevice {
+    device: GenericDevice,
+}
+
+impl TcpDevice {
+    fn create(
+        config: &str,
+        tx: Arc<Mutex<VecDeque<u8>>>,
+        rx: Arc<Mutex<VecDeque<u8>>>,
+    ) -> Result<TcpDevice> {
+        let tcp = TcpStream::connect(config)
+            .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
+        tcp.set_nodelay(true)?; // no write package grouping
+        tcp.set_write_timeout(None)?; // blocking write
+        tcp.set_read_timeout(Some(time::Duration::from_millis(10)))?; // unblocking read
+
+        Ok(TcpDevice {
+            device: GenericDevice::create(tcp.try_clone()?, tcp.try_clone()?, tx, rx)?,
+        })
+    }
+
+    fn stop(&mut self) {
+        self.device.stop();
+    }
+}
+
 struct SerialDevice {
-    stop: Arc<AtomicBool>,
-    threads: Vec<JoinHandle<()>>,
+    device: GenericDevice,
 }
 
 impl SerialDevice {
@@ -213,61 +229,19 @@ impl SerialDevice {
                 device, baud_rate
             )
         })?;
-        let mut serialport_tx = serialport.try_clone()?;
-        let mut serialport_rx = serialport.try_clone()?;
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_tx = stop.clone();
-        let stop_rx = stop.clone();
-
-        let mut threads = Vec::new();
-
-        // serial tx
-        threads.push(thread::spawn(move || {
-            println!("serial tx starts");
-            loop {
-                {
-                    let mut vec = tx.lock().unwrap();
-                    vec.make_contiguous();
-                    let (slice, _) = vec.as_slices(); // we can now be sure that `slice` contains all elements of the deque, while still having immutable access to `buf`.
-                    serialport_tx.write_all(slice).unwrap();
-                    vec.clear();
-                }
-
-                if stop_tx.load(Ordering::SeqCst) {
-                    break;
-                }
-                thread::sleep(time::Duration::from_millis(1));
-            }
-            println!("serial tx stopped");
-        }));
-
-        // serial rx
-        threads.push(thread::spawn(move || {
-            let mut buf = [0u8; 2048]; // max 2k
-            println!("serial rx starts");
-            loop {
-                if let Ok(n) = serialport_rx.read(&mut buf) {
-                    let mut vec = rx.lock().unwrap();
-                    vec.extend(buf[0..n].iter());
-                }
-
-                if stop_rx.load(Ordering::SeqCst) {
-                    break;
-                }
-                thread::sleep(time::Duration::from_millis(1));
-            }
-            println!("serial rx stopped");
-        }));
-
-        Ok(SerialDevice { stop, threads })
+        Ok(SerialDevice {
+            device: GenericDevice::create(
+                serialport.try_clone()?,
+                serialport.try_clone()?,
+                tx,
+                rx,
+            )?,
+        })
     }
 
     fn stop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        while let Some(t) = self.threads.pop() {
-            t.join().unwrap();
-        }
+        self.device.stop();
     }
 }
 
