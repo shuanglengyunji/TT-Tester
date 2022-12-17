@@ -1,4 +1,5 @@
 use std::{
+    any::type_name,
     collections::VecDeque,
     net::TcpStream,
     sync::{
@@ -29,6 +30,9 @@ impl Controller {
         let tx_clone = tx.clone();
         let rx_clone = rx.clone();
 
+        let sync = Arc::new(AtomicBool::new(false));
+        let sync_clone = sync.clone();
+
         let (sender, receiver): (Sender<u8>, Receiver<u8>) = mpsc::channel();
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -39,16 +43,36 @@ impl Controller {
 
         threads.push(thread::spawn(move || {
             println!("controller tx starts");
+
+            // sync data
             let mut index = 0;
             loop {
+                if sync.load(Ordering::SeqCst) {
+                    println!("tx sync at value {:?}!", index - 1);
+                    break;
+                }
                 tx_clone.lock().unwrap().push_back(index);
-                if let Err(_) = sender.send(index) {
-                    if stop_tx.load(Ordering::SeqCst) {
-                        break;
-                    } else {
+                sender.send(index).unwrap_or_else(|_| {
+                    if !stop_tx.load(Ordering::SeqCst) {
                         panic!("Unable to send expected value to rx thread");
                     }
-                }
+                });
+                index = index + 1;
+                thread::sleep(time::Duration::from_millis(500));
+            }
+
+            // test speed
+            loop {
+                let new = [index, index, index, index, index, index];
+                tx_clone.lock().unwrap().extend(new.iter());
+                new.iter().for_each(|x| {
+                    sender.send(*x).unwrap_or_else(|_| {
+                        if !stop_tx.load(Ordering::SeqCst) {
+                            panic!("Unable to send expected value to rx thread");
+                        }
+                    })
+                });
+
                 (index, _) = index.overflowing_add(1);
 
                 if stop_tx.load(Ordering::SeqCst) {
@@ -61,6 +85,27 @@ impl Controller {
 
         threads.push(thread::spawn(move || {
             println!("controller rx starts");
+            // sync data
+            let first = loop {
+                // wait for data
+                if let Some(x) = rx_clone.lock().unwrap().pop_front() {
+                    break x;
+                } else {
+                    thread::sleep(time::Duration::from_millis(1));
+                }
+            };
+            loop {
+                if let Ok(x) = receiver.recv_timeout(time::Duration::from_millis(10)) {
+                    if first == x {
+                        sync_clone.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+                thread::sleep(time::Duration::from_millis(1));
+            }
+            println!("rx sync at value {:?}!", first);
+
+            // test speed
             let mut bytes = 0;
             let mut begin = time::SystemTime::now();
             loop {
@@ -134,9 +179,9 @@ impl GenericDevice {
 
         let mut threads = Vec::new();
 
-        // tcp tx
+        // tx
         threads.push(thread::spawn(move || {
-            println!("tcp tx starts");
+            println!("starts tx with device type {}", type_name::<T>());
             loop {
                 {
                     let mut vec = tx.lock().unwrap();
@@ -151,13 +196,13 @@ impl GenericDevice {
                 }
                 thread::sleep(Duration::from_millis(1))
             }
-            println!("tcp tx stopped");
+            println!("stops tx with device type {}", type_name::<T>());
         }));
 
-        // tcp rx
+        // rx
         threads.push(thread::spawn(move || {
             let mut buf = [0u8; 2048]; // max 2k
-            println!("tcp rx starts");
+            println!("starts rx with device type {}", type_name::<T>());
             loop {
                 if let Ok(n) = rx_device.read(&mut buf) {
                     let mut vec = rx.lock().unwrap();
@@ -169,7 +214,7 @@ impl GenericDevice {
                 }
                 thread::sleep(time::Duration::from_millis(1));
             }
-            println!("tcp rx stopped");
+            println!("stops rx with device type {}", type_name::<T>());
         }));
 
         Ok(GenericDevice { stop, threads })
@@ -311,11 +356,18 @@ mod test {
         let rx = controller.rx();
 
         let start = time::SystemTime::now();
-        while start.elapsed().unwrap() < time::Duration::from_secs(1) {
+        let mut drop = 5; // drop first 5 bytes to simulate network delay
+        while start.elapsed().unwrap() < time::Duration::from_secs(10) {
             {
                 let mut tx_data = tx.lock().unwrap();
-                let mut rx_data = rx.lock().unwrap();
-                rx_data.append(&mut tx_data);
+
+                while let Some(x) = tx_data.pop_front() {
+                    if drop > 0 {
+                        drop = drop - 1;
+                        continue;
+                    }
+                    rx.lock().unwrap().push_back(x);
+                }
             }
             thread::sleep(time::Duration::from_millis(20));
         }
