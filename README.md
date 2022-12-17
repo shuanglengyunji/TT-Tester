@@ -1,6 +1,6 @@
 # Ser2Tcp-Tester
 
-[![codecov](https://codecov.io/gh/shuanglengyunji/TT-Tester/branch/master/graph/badge.svg?token=6BITB8YX3S)](https://codecov.io/gh/shuanglengyunji/TT-Tester)
+[![codecov](https://codecov.io/gh/shuanglengyunji/ser2tcp-tester/branch/master/graph/badge.svg?token=6BITB8YX3S)](https://codecov.io/gh/shuanglengyunji/ser2tcp-tester)
 
 A speed tester for Transparent Transmission (TT) between tcp and serial port.
 
