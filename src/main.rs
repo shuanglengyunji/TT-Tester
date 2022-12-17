@@ -4,7 +4,8 @@ use std::{
     net::TcpStream,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, mpsc::channel,
+        mpsc::channel,
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
     time::{self, Duration},
@@ -79,29 +80,20 @@ impl Controller {
         threads.push(thread::spawn(move || {
             println!("controller rx starts");
             // sync data
-            let first = loop {
+            loop {
                 // wait for data
                 if let Some(x) = rx_clone.lock().unwrap().pop_front() {
                     println!("controller rx received value {:?}!", x);
-                    break x;
-                } else {
-                    thread::sleep(time::Duration::from_millis(1));
-                }
-                if stop_rx.load(Ordering::SeqCst) {
-                    break 0;
-                }
-            };
-            loop {
-                let mut bridge = bridge_clone.lock().unwrap();
-                if let Some(x) = bridge.pop_front() {
-                    if first == x {
-                        println!("controller rx sync at value {:?}!", first);
+                    let mut bridge_mutex = bridge_clone.lock().unwrap();
+                    if let Some(n) = bridge_mutex.iter().position(|y| x == *y) {
                         sync_clone.store(true, Ordering::SeqCst);
+                        bridge_mutex.drain(0..=n);
+                        println!("controller rx sync at value {:?}!", x);
                         break;
                     } else {
                         println!(
-                            "controller with value {:?} rx missed sync value {:?}!",
-                            first, x
+                            "controller rx received value {:?} doesn't match sync value {:?}",
+                            x, bridge_mutex
                         );
                     }
                 }
