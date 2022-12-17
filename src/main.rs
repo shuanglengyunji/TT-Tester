@@ -4,13 +4,11 @@ use std::{
     net::TcpStream,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, mpsc::channel,
     },
     thread::{self, JoinHandle},
     time::{self, Duration},
 };
-
-use signal_hook::{consts::SIGINT, iterator::Signals};
 
 use anyhow::{Context, Result};
 use clap::{Arg, Command};
@@ -304,7 +302,7 @@ fn main() -> Result<()> {
         .about("Speed tester for transparent transmission between tcp and serial port")
         .arg(
             Arg::new("serial")
-                // .required(true)
+                .required(true)
                 .short('s')
                 .long("serial")
                 .value_name("DEVICE:BAUD_RATE")
@@ -335,8 +333,13 @@ fn main() -> Result<()> {
         tcp_to_serial_controller.rx(),
     )?;
 
-    let mut signals = Signals::new(&[SIGINT])?;
-    signals.wait();
+    // wait for ctrl-c
+    let (sender, receiver) = channel();
+    ctrlc::set_handler(move || {
+        let _ = sender.send(());
+    })?;
+    receiver.recv()?;
+    println!("Goodbye!");
 
     tcp_to_serial_controller.stop();
     serial_to_tcp_controller.stop();
