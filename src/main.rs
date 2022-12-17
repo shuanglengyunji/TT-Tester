@@ -48,29 +48,32 @@ impl Controller {
             let mut index = 0;
             loop {
                 if sync.load(Ordering::SeqCst) {
-                    println!("tx sync at value {:?}!", index - 1);
                     break;
                 }
+                println!("controller tx try sync with value {:?}!", index);
                 tx_clone.lock().unwrap().push_back(index);
                 bridge.lock().unwrap().push_back(index);
-                index = index + 1;
-                thread::sleep(time::Duration::from_millis(500));
-            }
-
-            // test speed
-            loop {
-                let new = [index, index, index, index, index, index];
-                tx_clone.lock().unwrap().extend(new.iter());
-                new.iter().for_each(|x| {
-                    bridge.lock().unwrap().push_back(*x);
-                });
-
                 (index, _) = index.overflowing_add(1);
 
                 if stop_tx.load(Ordering::SeqCst) {
                     break;
                 }
-                thread::sleep(Duration::from_nanos(1));
+                thread::sleep(time::Duration::from_millis(500));
+            }
+
+            // test speed
+            loop {
+                let new = [index; 100];
+                tx_clone.lock().unwrap().extend(new.iter());
+                new.iter().for_each(|x| {
+                    bridge.lock().unwrap().push_back(*x);
+                });
+                (index, _) = index.overflowing_add(1);
+
+                if stop_tx.load(Ordering::SeqCst) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
             }
             println!("controller tx stopped");
         }));
@@ -81,21 +84,34 @@ impl Controller {
             let first = loop {
                 // wait for data
                 if let Some(x) = rx_clone.lock().unwrap().pop_front() {
+                    println!("controller rx received value {:?}!", x);
                     break x;
                 } else {
                     thread::sleep(time::Duration::from_millis(1));
                 }
+                if stop_rx.load(Ordering::SeqCst) {
+                    break 0;
+                }
             };
             loop {
-                if let Some(x) = bridge_clone.lock().unwrap().pop_front() {
+                let mut bridge = bridge_clone.lock().unwrap();
+                if let Some(x) = bridge.pop_front() {
                     if first == x {
+                        println!("controller rx sync at value {:?}!", first);
                         sync_clone.store(true, Ordering::SeqCst);
                         break;
+                    } else {
+                        println!(
+                            "controller with value {:?} rx missed sync value {:?}!",
+                            first, x
+                        );
                     }
+                }
+                if stop_rx.load(Ordering::SeqCst) {
+                    break;
                 }
                 thread::sleep(time::Duration::from_millis(1));
             }
-            println!("rx sync at value {:?}!", first);
 
             // test speed
             let mut bytes = 0;
@@ -120,11 +136,11 @@ impl Controller {
                     break;
                 }
                 if begin.elapsed().unwrap() >= time::Duration::from_secs(1) {
-                    println!("received {:?} bytes", bytes);
+                    println!("transmission speed: {:?}KB/s", (bytes as f64) / 1000.0);
                     bytes = 0;
                     begin = time::SystemTime::now();
                 }
-                thread::sleep(Duration::from_nanos(1));
+                thread::sleep(Duration::from_millis(1));
             }
             println!("controller rx stopped");
         }));
@@ -349,7 +365,7 @@ mod test {
 
         let start = time::SystemTime::now();
         let mut drop = 5; // drop first 5 bytes to simulate network delay
-        while start.elapsed().unwrap() < time::Duration::from_secs(10) {
+        while start.elapsed().unwrap() < time::Duration::from_secs(5) {
             {
                 let mut tx_data = tx.lock().unwrap();
 

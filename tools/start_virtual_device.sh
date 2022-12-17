@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# clear existing servers
+pkill ser2net
+pkill socat
+
 # TCP ECHO (PORT 4000)
 socat -dd tcp-l:4000,fork exec:'/bin/cat' 1> /dev/null &
 
