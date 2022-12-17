@@ -27,6 +27,12 @@ jobs:
         with:
           toolchain: stable
           override: true
+      
+      - name: Setup Cargo tools
+        run: |
+          cargo install cargo-quickinstall
+          cargo quickinstall cargo-tarpaulin
+          cargo quickinstall cross
 
       - name: Add virtual device
         run: |
@@ -38,18 +44,24 @@ jobs:
         run: cargo test
 
       - name: Run cargo-tarpaulin
-        uses: actions-rs/tarpaulin@v0.1
+        run: cargo tarpaulin --out Html --out Xml
 
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v2
 
-      - name: Archive code coverage results
+      - name: Build Linux
+        run: |
+          cross build --release --target x86_64-unknown-linux-gnu
+
+      - name: Build Windows
+        run: |
+          cross build --release --target x86_64-pc-windows-gnu
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: code-coverage-report
-          path: cobertura.xml
-
-      - name: Build
-        run: |
-          cargo install cross
-          cross build --target x86_64-unknown-linux-gnu --release
+          name: ci-artifact
+          path: |
+            tarpaulin-report.html
+            target/x86_64-unknown-linux-gnu/release/ser2tcp-tester
+            target/x86_64-pc-windows-gnu/release/ser2tcp-tester.exe
