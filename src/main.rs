@@ -17,17 +17,10 @@ use clap::{Arg, Command};
 struct Controller {
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
-    tx: Arc<Mutex<VecDeque<u8>>>,
-    rx: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl Controller {
-    fn create() -> Result<Controller> {
-        let tx = Arc::new(Mutex::new(VecDeque::<u8>::new()));
-        let rx = Arc::new(Mutex::new(VecDeque::<u8>::new()));
-        let tx_clone = tx.clone();
-        let rx_clone = rx.clone();
-
+    fn create(tx: Arc<Mutex<VecDeque<u8>>>, rx: Arc<Mutex<VecDeque<u8>>>) -> Result<Controller> {
         let sync = Arc::new(AtomicBool::new(false));
         let sync_clone = sync.clone();
 
@@ -50,7 +43,7 @@ impl Controller {
                     break;
                 }
                 println!("controller tx try sync with value {:?}!", index);
-                tx_clone.lock().unwrap().push_back(index);
+                tx.lock().unwrap().push_back(index);
                 bridge.lock().unwrap().push_back(index);
                 (index, _) = index.overflowing_add(1);
 
@@ -63,7 +56,7 @@ impl Controller {
             // test speed
             loop {
                 let new = [index; 100];
-                tx_clone.lock().unwrap().extend(new.iter());
+                tx.lock().unwrap().extend(new.iter());
                 new.iter().for_each(|x| {
                     bridge.lock().unwrap().push_back(*x);
                 });
@@ -82,7 +75,7 @@ impl Controller {
             // sync data
             loop {
                 // wait for data
-                if let Some(x) = rx_clone.lock().unwrap().pop_front() {
+                if let Some(x) = rx.lock().unwrap().pop_front() {
                     println!("controller rx received value {:?}!", x);
                     let mut bridge_mutex = bridge_clone.lock().unwrap();
                     if let Some(n) = bridge_mutex.iter().position(|y| x == *y) {
@@ -108,7 +101,7 @@ impl Controller {
             let mut begin = time::SystemTime::now();
             loop {
                 {
-                    let mut data_received = rx_clone.lock().unwrap();
+                    let mut data_received = rx.lock().unwrap();
                     while let Some(received) = data_received.pop_front() {
                         let expected = loop {
                             if let Some(x) = bridge_clone.lock().unwrap().pop_front() {
@@ -135,12 +128,7 @@ impl Controller {
             println!("controller rx stopped");
         }));
 
-        Ok(Controller {
-            stop,
-            threads,
-            tx,
-            rx,
-        })
+        Ok(Controller { stop, threads })
     }
 
     fn stop(&mut self) {
@@ -149,27 +137,19 @@ impl Controller {
             t.join().unwrap();
         }
     }
-
-    fn tx(&self) -> Arc<Mutex<VecDeque<u8>>> {
-        self.tx.clone()
-    }
-
-    fn rx(&self) -> Arc<Mutex<VecDeque<u8>>> {
-        self.rx.clone()
-    }
 }
 
 struct GenericDevice {
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
+    tx: Arc<Mutex<VecDeque<u8>>>,
+    rx: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl GenericDevice {
     fn create<T: std::io::Read + std::io::Write + std::marker::Send + 'static>(
         mut tx_device: T,
         mut rx_device: T,
-        tx: Arc<Mutex<VecDeque<u8>>>,
-        rx: Arc<Mutex<VecDeque<u8>>>,
     ) -> Result<GenericDevice> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_tx = stop.clone();
@@ -177,12 +157,17 @@ impl GenericDevice {
 
         let mut threads = Vec::new();
 
+        let tx = Arc::new(Mutex::new(VecDeque::new()));
+        let rx = Arc::new(Mutex::new(VecDeque::new()));
+        let tx_clone = tx.clone();
+        let rx_clone = rx.clone();
+
         // tx
         threads.push(thread::spawn(move || {
             println!("starts tx with device type {}", type_name::<T>());
             loop {
                 {
-                    let mut vec = tx.lock().unwrap();
+                    let mut vec = tx_clone.lock().unwrap();
                     vec.make_contiguous();
                     let (slice, _) = vec.as_slices(); // we can now be sure that `slice` contains all elements of the deque, while still having immutable access to `buf`.
                     tx_device.write_all(slice).unwrap();
@@ -203,7 +188,7 @@ impl GenericDevice {
             println!("starts rx with device type {}", type_name::<T>());
             loop {
                 if let Ok(n) = rx_device.read(&mut buf) {
-                    let mut vec = rx.lock().unwrap();
+                    let mut vec = rx_clone.lock().unwrap();
                     vec.extend(buf[0..n].iter());
                 }
 
@@ -215,7 +200,12 @@ impl GenericDevice {
             println!("stops rx with device type {}", type_name::<T>());
         }));
 
-        Ok(GenericDevice { stop, threads })
+        Ok(GenericDevice {
+            stop,
+            threads,
+            tx,
+            rx,
+        })
     }
 
     fn stop(&mut self) {
@@ -231,11 +221,7 @@ struct TcpDevice {
 }
 
 impl TcpDevice {
-    fn create(
-        config: &str,
-        tx: Arc<Mutex<VecDeque<u8>>>,
-        rx: Arc<Mutex<VecDeque<u8>>>,
-    ) -> Result<TcpDevice> {
+    fn create(config: &str) -> Result<TcpDevice> {
         let tcp = TcpStream::connect(config)
             .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
         tcp.set_nodelay(true)?; // no write package grouping
@@ -243,7 +229,7 @@ impl TcpDevice {
         tcp.set_read_timeout(Some(time::Duration::from_millis(10)))?; // unblocking read
 
         Ok(TcpDevice {
-            device: GenericDevice::create(tcp.try_clone()?, tcp.try_clone()?, tx, rx)?,
+            device: GenericDevice::create(tcp.try_clone()?, tcp.try_clone()?)?,
         })
     }
 
@@ -257,11 +243,7 @@ struct SerialDevice {
 }
 
 impl SerialDevice {
-    fn create(
-        config: &str,
-        tx: Arc<Mutex<VecDeque<u8>>>,
-        rx: Arc<Mutex<VecDeque<u8>>>,
-    ) -> Result<SerialDevice> {
+    fn create(config: &str) -> Result<SerialDevice> {
         let mut serial_iter = config.split(':');
         let device = serial_iter.next().unwrap();
         let baud_rate = serial_iter.next().unwrap().parse::<u32>().unwrap();
@@ -274,12 +256,7 @@ impl SerialDevice {
         })?;
 
         Ok(SerialDevice {
-            device: GenericDevice::create(
-                serialport.try_clone()?,
-                serialport.try_clone()?,
-                tx,
-                rx,
-            )?,
+            device: GenericDevice::create(serialport.try_clone()?, serialport.try_clone()?)?,
         })
     }
 
@@ -310,19 +287,20 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
-    let mut tcp_to_serial_controller = Controller::create().unwrap();
-    let mut serial_to_tcp_controller = Controller::create().unwrap();
-
-    let mut tcp_device = TcpDevice::create(
-        m.get_one::<String>("tcp").expect("tcp config is required"),
-        tcp_to_serial_controller.tx(),
-        serial_to_tcp_controller.rx(),
-    )?;
+    let mut tcp_device =
+        TcpDevice::create(m.get_one::<String>("tcp").expect("tcp config is required"))?;
     let mut serial_device = SerialDevice::create(
         m.get_one::<String>("serial")
             .expect("serial config is required"),
-        serial_to_tcp_controller.tx(),
-        tcp_to_serial_controller.rx(),
+    )?;
+
+    let mut tcp_to_serial_controller = Controller::create(
+        tcp_device.device.tx.clone(),
+        serial_device.device.rx.clone(),
+    )?;
+    let mut serial_to_tcp_controller = Controller::create(
+        serial_device.device.tx.clone(),
+        tcp_device.device.rx.clone(),
     )?;
 
     // wait for ctrl-c
@@ -354,22 +332,25 @@ mod test {
 
     #[test]
     fn test_controller() {
-        let mut controller = Controller::create().unwrap();
-        let tx = controller.tx();
-        let rx = controller.rx();
+        let tx = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let rx = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let tx_clone = tx.clone();
+        let rx_clone = rx.clone();
+
+        let mut controller = Controller::create(tx, rx).unwrap();
 
         let start = time::SystemTime::now();
         let mut drop = 5; // drop first 5 bytes to simulate network delay
         while start.elapsed().unwrap() < time::Duration::from_secs(5) {
             {
-                let mut tx_data = tx.lock().unwrap();
+                let mut tx_data = tx_clone.lock().unwrap();
 
                 while let Some(x) = tx_data.pop_front() {
                     if drop > 0 {
                         drop = drop - 1;
                         continue;
                     }
-                    rx.lock().unwrap().push_back(x);
+                    rx_clone.lock().unwrap().push_back(x);
                 }
             }
             thread::sleep(time::Duration::from_millis(20));
@@ -380,41 +361,35 @@ mod test {
 
     #[test]
     fn test_serial_device() {
-        let send_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
-        let rec_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
-        let send_buf_clone = rec_buf.clone();
-        let rec_buf_clone = rec_buf.clone();
-
         // test with serial echo server at /tmp/serial0
-        let mut dev = SerialDevice::create("/tmp/serial0:115200", send_buf, rec_buf).unwrap();
-
-        send_buf_clone
+        let mut dev = SerialDevice::create("/tmp/serial0:115200").unwrap();
+        dev.device
+            .tx
+            .clone()
             .lock()
             .unwrap()
             .extend([1_u8, 2, 3, 4, 5].iter());
-        thread::sleep(time::Duration::from_secs(1));
-        assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
 
+        thread::sleep(time::Duration::from_secs(1));
+
+        assert_eq!(*dev.device.rx.clone().lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
         dev.stop();
     }
 
     #[test]
     fn test_tcp_device() {
-        let send_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
-        let rec_buf = Arc::new(Mutex::new(VecDeque::<u8>::new()));
-        let send_buf_clone = rec_buf.clone();
-        let rec_buf_clone = rec_buf.clone();
-
         // test with TCP echo server at port 4000
-        let mut dev = TcpDevice::create("127.0.0.1:4000", send_buf, rec_buf).unwrap();
-
-        send_buf_clone
+        let mut dev = TcpDevice::create("127.0.0.1:4000").unwrap();
+        dev.device
+            .tx
+            .clone()
             .lock()
             .unwrap()
             .extend([1_u8, 2, 3, 4, 5].iter());
-        thread::sleep(time::Duration::from_secs(1));
-        assert_eq!(*rec_buf_clone.lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
 
+        thread::sleep(time::Duration::from_secs(1));
+
+        assert_eq!(*dev.device.rx.clone().lock().unwrap(), &[1_u8, 2, 3, 4, 5]);
         dev.stop();
     }
 }
