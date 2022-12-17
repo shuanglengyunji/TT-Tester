@@ -4,7 +4,6 @@ use std::{
     net::TcpStream,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -33,7 +32,8 @@ impl Controller {
         let sync = Arc::new(AtomicBool::new(false));
         let sync_clone = sync.clone();
 
-        let (sender, receiver): (Sender<u8>, Receiver<u8>) = mpsc::channel();
+        let bridge = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+        let bridge_clone = bridge.clone();
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_tx = stop.clone();
@@ -52,11 +52,7 @@ impl Controller {
                     break;
                 }
                 tx_clone.lock().unwrap().push_back(index);
-                sender.send(index).unwrap_or_else(|_| {
-                    if !stop_tx.load(Ordering::SeqCst) {
-                        panic!("Unable to send expected value to rx thread");
-                    }
-                });
+                bridge.lock().unwrap().push_back(index);
                 index = index + 1;
                 thread::sleep(time::Duration::from_millis(500));
             }
@@ -66,11 +62,7 @@ impl Controller {
                 let new = [index, index, index, index, index, index];
                 tx_clone.lock().unwrap().extend(new.iter());
                 new.iter().for_each(|x| {
-                    sender.send(*x).unwrap_or_else(|_| {
-                        if !stop_tx.load(Ordering::SeqCst) {
-                            panic!("Unable to send expected value to rx thread");
-                        }
-                    })
+                    bridge.lock().unwrap().push_back(*x);
                 });
 
                 (index, _) = index.overflowing_add(1);
@@ -95,7 +87,7 @@ impl Controller {
                 }
             };
             loop {
-                if let Ok(x) = receiver.recv_timeout(time::Duration::from_millis(10)) {
+                if let Some(x) = bridge_clone.lock().unwrap().pop_front() {
                     if first == x {
                         sync_clone.store(true, Ordering::SeqCst);
                         break;
@@ -113,7 +105,7 @@ impl Controller {
                     let mut data_received = rx_clone.lock().unwrap();
                     while let Some(received) = data_received.pop_front() {
                         let expected = loop {
-                            if let Ok(x) = receiver.recv_timeout(time::Duration::from_millis(10)) {
+                            if let Some(x) = bridge_clone.lock().unwrap().pop_front() {
                                 break x;
                             }
                             thread::sleep(time::Duration::from_millis(1));
