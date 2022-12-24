@@ -221,12 +221,13 @@ fn create_serial_device(config: &str, stop: Arc<AtomicBool>) -> Result<GenericDe
     let device = serial_iter.next().unwrap();
     let baud_rate = serial_iter.next().unwrap().parse::<u32>().unwrap();
 
-    let serialport = serialport::new(device, baud_rate).open().with_context(|| {
+    let mut serialport = serialport::new(device, baud_rate).open().with_context(|| {
         format!(
             "Failed to open serialport device {} with baud rate {}",
             device, baud_rate
         )
     })?;
+    serialport.set_timeout(time::Duration::from_secs(1)).unwrap();
 
     Ok(GenericDevice::create(
         serialport.try_clone()?,
