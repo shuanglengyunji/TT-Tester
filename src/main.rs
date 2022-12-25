@@ -57,7 +57,7 @@ impl Controller {
 
             // test speed
             loop {
-                let new = [index; 100];
+                let new = [index; 1_000];
                 tx.lock().unwrap().extend(new.iter());
                 new.iter().for_each(|x| {
                     bridge.lock().unwrap().push_back(*x);
@@ -165,7 +165,6 @@ impl GenericDevice {
                     vec.make_contiguous();
                     let (slice, _) = vec.as_slices(); // we can now be sure that `slice` contains all elements of the deque, while still having immutable access to `buf`.
                     tx_device.write_all(slice).unwrap();
-                    tx_device.flush().unwrap();
                     vec.clear();
                 }
 
@@ -205,7 +204,7 @@ impl GenericDevice {
 fn create_tcp_device(config: &str, stop: Arc<AtomicBool>) -> Result<GenericDevice> {
     let tcp = TcpStream::connect(config)
         .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
-    tcp.set_nodelay(true)?; // no write package grouping
+    tcp.set_nodelay(false)?; // use write package grouping
     tcp.set_write_timeout(None)?; // blocking write
     tcp.set_read_timeout(Some(time::Duration::from_millis(10)))?; // unblocking read
 
@@ -227,7 +226,9 @@ fn create_serial_device(config: &str, stop: Arc<AtomicBool>) -> Result<GenericDe
             device, baud_rate
         )
     })?;
-    serialport.set_timeout(time::Duration::from_secs(1)).unwrap();
+    serialport
+        .set_timeout(time::Duration::from_secs(1))
+        .unwrap();
 
     Ok(GenericDevice::create(
         serialport.try_clone()?,
@@ -256,7 +257,9 @@ fn main() -> Result<()> {
                 .short('d').long("device")
                 .value_names(["TYPE:DEVICE", "TYPE:DEVICE or echo"])
                 .num_args(2)
-                .help("serial:/dev/ttyUSB0:115200 (Linux) or serial:COM1:115200 (Windows) for serial port, tcp:192.168.7.1:8000 for tcp server, echo for single device echo mode"),
+                .help("Serial port: serial:/dev/ttyUSB0:115200 (Linux) or serial:COM1:115200 (Windows),\n\
+                       TCP: tcp:192.168.7.1:8000 for tcp server\n\
+                       Echo mode: use \"echo\" in place of the second device"),
         )
         .get_matches();
 
