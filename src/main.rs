@@ -8,7 +8,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::{self, Duration},
+    time::{self, Duration}, process::exit,
 };
 
 use anyhow::{Context, Result};
@@ -112,7 +112,8 @@ impl Controller {
                             thread::sleep(time::Duration::from_millis(1));
                         };
                         if expected != received {
-                            panic!("expected: {:?} received: {:?}", expected, received);
+                            println!("Error: expected: {:?} received: {:?}", expected, received);
+                            exit(1);
                         }
                         bytes = bytes + 1;
                     }
@@ -164,7 +165,10 @@ impl GenericDevice {
                     let mut vec = tx_clone.lock().unwrap();
                     vec.make_contiguous();
                     let (slice, _) = vec.as_slices(); // we can now be sure that `slice` contains all elements of the deque, while still having immutable access to `buf`.
-                    tx_device.write_all(slice).unwrap();
+                    tx_device.write_all(slice).unwrap_or_else(|e|{
+                        println!("Tx error: {:?}", e);
+                        exit(1);
+                    });
                     vec.clear();
                 }
 
@@ -204,9 +208,9 @@ impl GenericDevice {
 fn create_tcp_device(config: &str, stop: Arc<AtomicBool>) -> Result<GenericDevice> {
     let tcp = TcpStream::connect(config)
         .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
-    tcp.set_nodelay(false)?; // use write package grouping
-    tcp.set_write_timeout(None)?; // blocking write
-    tcp.set_read_timeout(Some(time::Duration::from_millis(10)))?; // unblocking read
+    tcp.set_nodelay(true)?; // turn off write package grouping, send out tcp package as-is
+    tcp.set_write_timeout(Some(time::Duration::from_secs(10)))?; // non-blocking write
+    tcp.set_read_timeout(Some(time::Duration::from_millis(10)))?; // non-blocking read
 
     Ok(GenericDevice::create(
         tcp.try_clone()?,
