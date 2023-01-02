@@ -260,7 +260,7 @@ mod test {
     use std::time;
     use std::{sync::Arc, thread};
 
-    use crate::{run, Generator, GenericDevice};
+    use crate::{run, stop, Generator, GenericDevice};
 
     /// test data generator/validator
     #[test]
@@ -273,41 +273,31 @@ mod test {
     /// test with serial echo server at /tmp/serial0
     #[test]
     fn test_serial_device() {
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop_signal = Arc::new(AtomicBool::new(false));
         let mut devices: Vec<GenericDevice> = Vec::new();
 
         run(
             ["serial:/tmp/serial0:115200", "echo"],
             &mut devices,
-            stop.clone(),
+            stop_signal.clone(),
         )
         .unwrap();
 
         thread::sleep(time::Duration::from_secs(1));
 
-        stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        devices.iter_mut().for_each(|d: &mut GenericDevice| {
-            while let Some(t) = d.threads.pop() {
-                t.join().unwrap();
-            }
-        });
+        stop(&mut devices, stop_signal);
     }
 
     /// test with TCP echo server at port 4000
     #[test]
     fn test_tcp_device() {
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop_signal = Arc::new(AtomicBool::new(false));
         let mut devices: Vec<GenericDevice> = Vec::new();
 
-        run(["tcp:127.0.0.1:4000", "echo"], &mut devices, stop.clone()).unwrap();
+        run(["tcp:127.0.0.1:4000", "echo"], &mut devices, stop_signal.clone()).unwrap();
 
         thread::sleep(time::Duration::from_secs(1));
 
-        stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        devices.iter_mut().for_each(|d: &mut GenericDevice| {
-            while let Some(t) = d.threads.pop() {
-                t.join().unwrap();
-            }
-        });
+        stop(&mut devices, stop_signal);
     }
 }
