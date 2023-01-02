@@ -14,6 +14,7 @@ bus = "2.3.0"
 signal-hook = "0.3.14"
 itertools = "0.10.5"
 ctrlc = "3.2.4"
+rand = "0.8.5"
 
 [package.metadata.cross.target.x86_64-unknown-linux-gnu]
 pre-build = ["apt-get update && apt-get install -y libudev-dev"]

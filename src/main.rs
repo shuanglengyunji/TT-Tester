@@ -1,3 +1,7 @@
+use anyhow::{Context, Result};
+use clap::{Arg, Command};
+use rand::distributions::Standard;
+use rand::{thread_rng, Rng};
 use std::{
     any::type_name,
     collections::VecDeque,
@@ -13,9 +17,6 @@ use std::{
     time::{self, Duration},
 };
 
-use anyhow::{anyhow, Context, Result};
-use clap::{Arg, Command};
-
 struct Generator {
     queue: VecDeque<u8>,
 }
@@ -28,18 +29,15 @@ impl Generator {
     }
 
     fn generate(&mut self) -> Vec<u8> {
-        let data = vec![0_u8; 100];
+        let mut rng = thread_rng();
+        let data: Vec<u8> = (&mut rng).sample_iter(Standard).take(1_000).collect();
         self.queue.extend(data.iter());
         data
     }
 
-    fn validate(&mut self, data: &[u8]) -> Result<()> {
+    fn validate(&mut self, data: &[u8]) -> bool {
         let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
-        if reference == data {
-            Ok(())
-        } else {
-            Err(anyhow!("value mismatch"))
-        }
+        reference == data
     }
 }
 
@@ -85,7 +83,10 @@ impl GenericDevice {
             println!("starts rx with device type {}", type_name::<T>());
             loop {
                 if let Ok(n) = rx_device.read(&mut buf) {
-                    rx_generator.lock().unwrap().validate(&buf[0..n]).unwrap();
+                    if !rx_generator.lock().unwrap().validate(&buf[0..n]) {
+                        println!("data mismatch");
+                        exit(1);
+                    }
                     bytes = bytes + n;
                 }
                 if stop_rx.load(Ordering::SeqCst) {
@@ -254,7 +255,7 @@ mod test {
     fn test_generator() {
         let mut generate = Generator::create().unwrap();
         let data = generate.generate();
-        assert!(generate.validate(&data).is_ok());
+        assert!(generate.validate(&data));
     }
 
     #[test]
@@ -263,7 +264,7 @@ mod test {
         let generator = Arc::new(Mutex::new(Generator::create().unwrap()));
 
         // test with serial echo server at /tmp/serial0
-        let dev = create_serial_device(
+        let _ = create_serial_device(
             "/tmp/serial0:115200",
             generator.clone(),
             generator.clone(),
@@ -279,7 +280,7 @@ mod test {
         let generator = Arc::new(Mutex::new(Generator::create().unwrap()));
 
         // test with TCP echo server at port 4000
-        let dev = create_tcp_device(
+        let _ = create_tcp_device(
             "127.0.0.1:4000",
             generator.clone(),
             generator.clone(),
