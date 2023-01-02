@@ -171,6 +171,54 @@ fn create_device(
     }
 }
 
+fn run(configs: [&str; 2], devices: &mut Vec<GenericDevice>, stop: Arc<AtomicBool>) -> Result<()> {
+    if configs[1] == "echo" {
+        // echo mode
+        let generator = Arc::new(Mutex::new(Generator::create()?));
+        devices.push(create_device(
+            configs[0],
+            generator.clone(),
+            generator.clone(),
+            stop.clone(),
+        )?);
+    } else {
+        let generator_1 = Arc::new(Mutex::new(Generator::create()?));
+        let generator_2 = Arc::new(Mutex::new(Generator::create()?));
+        devices.push(create_device(
+            configs[0],
+            generator_1.clone(),
+            generator_2.clone(),
+            stop.clone(),
+        )?);
+        devices.push(create_device(
+            configs[1],
+            generator_2.clone(),
+            generator_1,
+            stop.clone(),
+        )?);
+    }
+    Ok(())
+}
+
+fn wait_ctrl_c() {
+    let (sender, receiver) = channel();
+    ctrlc::set_handler(move || {
+        let _ = sender.send(());
+    })
+    .unwrap();
+    receiver.recv().unwrap();
+    println!("Goodbye!");
+}
+
+fn stop(devices: &mut Vec<GenericDevice>, stop: Arc<AtomicBool>) {
+    stop.store(true, Ordering::SeqCst);
+    devices.iter_mut().for_each(|d: &mut GenericDevice| {
+        while let Some(t) = d.threads.pop() {
+            t.join().unwrap();
+        }
+    });
+}
+
 fn main() -> Result<()> {
     let m = Command::new("ser2tcp-tester")
         .version(clap::crate_version!())
@@ -187,55 +235,21 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
-    let configs = m
+    let configs: [&str; 2] = m
         .get_many::<String>("device")
         .unwrap_or_default()
         .map(|v| v.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(configs.len(), 2);
+        .collect::<Vec<_>>()
+        .as_slice()
+        .try_into()
+        .unwrap();
 
-    let stop = Arc::new(AtomicBool::new(false));
-    let mut device_vec: Vec<GenericDevice> = Vec::new();
-    if configs[1] == "echo" {
-        // echo mode
-        let generator = Arc::new(Mutex::new(Generator::create()?));
-        device_vec.push(create_device(
-            configs[0],
-            generator.clone(),
-            generator.clone(),
-            stop.clone(),
-        )?);
-    } else {
-        let generator_1 = Arc::new(Mutex::new(Generator::create()?));
-        let generator_2 = Arc::new(Mutex::new(Generator::create()?));
-        device_vec.push(create_device(
-            configs[0],
-            generator_1.clone(),
-            generator_2.clone(),
-            stop.clone(),
-        )?);
-        device_vec.push(create_device(
-            configs[1],
-            generator_2.clone(),
-            generator_1,
-            stop.clone(),
-        )?);
-    }
+    let stop_signal = Arc::new(AtomicBool::new(false));
+    let mut devices: Vec<GenericDevice> = Vec::new();
 
-    // wait for ctrl-c
-    let (sender, receiver) = channel();
-    ctrlc::set_handler(move || {
-        let _ = sender.send(());
-    })?;
-    receiver.recv()?;
-    println!("Goodbye!");
-
-    stop.store(true, Ordering::SeqCst);
-    device_vec.iter_mut().for_each(|d: &mut GenericDevice| {
-        while let Some(t) = d.threads.pop() {
-            t.join().unwrap();
-        }
-    });
+    run(configs, &mut devices, stop_signal.clone())?;
+    wait_ctrl_c();
+    stop(&mut devices, stop_signal.clone());
 
     Ok(())
 }
@@ -244,12 +258,9 @@ fn main() -> Result<()> {
 mod test {
     use std::sync::atomic::AtomicBool;
     use std::time;
-    use std::{
-        sync::{Arc, Mutex},
-        thread,
-    };
+    use std::{sync::Arc, thread};
 
-    use crate::{create_serial_device, create_tcp_device, Generator};
+    use crate::{run, Generator, GenericDevice};
 
     /// test data generator/validator
     #[test]
@@ -263,12 +274,11 @@ mod test {
     #[test]
     fn test_serial_device() {
         let stop = Arc::new(AtomicBool::new(false));
-        let generator = Arc::new(Mutex::new(Generator::create().unwrap()));
+        let mut devices: Vec<GenericDevice> = Vec::new();
 
-        let mut device = create_serial_device(
-            "/tmp/serial0:115200",
-            generator.clone(),
-            generator.clone(),
+        run(
+            ["serial:/tmp/serial0:115200", "echo"],
+            &mut devices,
             stop.clone(),
         )
         .unwrap();
@@ -276,30 +286,28 @@ mod test {
         thread::sleep(time::Duration::from_secs(1));
 
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        while let Some(t) = device.threads.pop() {
-            t.join().unwrap();
-        }
+        devices.iter_mut().for_each(|d: &mut GenericDevice| {
+            while let Some(t) = d.threads.pop() {
+                t.join().unwrap();
+            }
+        });
     }
 
     /// test with TCP echo server at port 4000
     #[test]
     fn test_tcp_device() {
         let stop = Arc::new(AtomicBool::new(false));
-        let generator = Arc::new(Mutex::new(Generator::create().unwrap()));
+        let mut devices: Vec<GenericDevice> = Vec::new();
 
-        let mut device = create_tcp_device(
-            "127.0.0.1:4000",
-            generator.clone(),
-            generator.clone(),
-            stop.clone(),
-        )
-        .unwrap();
+        run(["tcp:127.0.0.1:4000", "echo"], &mut devices, stop.clone()).unwrap();
 
         thread::sleep(time::Duration::from_secs(1));
 
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        while let Some(t) = device.threads.pop() {
-            t.join().unwrap();
-        }
+        devices.iter_mut().for_each(|d: &mut GenericDevice| {
+            while let Some(t) = d.threads.pop() {
+                t.join().unwrap();
+            }
+        });
     }
 }
