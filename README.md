@@ -9,13 +9,14 @@ A speed tester for Transparent Transmission (TT) between tcp and serial port.
 > ser2tcp-tester --help
 Speed tester for transparent transmission between tcp and serial port
 
-Usage: ser2tcp-tester --serial <DEVICE:BAUD_RATE> --tcp <ADDRESS:PORT>
+Usage: ser2tcp-tester --device <TYPE:DEVICE> <TYPE:DEVICE or echo>
 
 Options:
-  -s, --serial <DEVICE:BAUD_RATE>  Serial port device, for example: /dev/ttyUSB0:115200 (Linux) or COM1:115200 (Windows)
-  -t, --tcp <ADDRESS:PORT>         Tcp port, for example: 192.168.7.1:8000
-  -h, --help                       Print help information
-  -V, --version                    Print version information
+  -d, --device <TYPE:DEVICE> <TYPE:DEVICE or echo>  Serial port: serial:/dev/ttyUSB0:115200 (Linux) or serial:COM1:115200 (Windows),
+                                                    TCP: tcp:192.168.7.1:8000 for tcp server
+                                                    Echo mode: use "echo" in place of the second device
+  -h, --help                                        Print help information
+  -V, --version                                     Print version information
 ```
 
 # Cross compile

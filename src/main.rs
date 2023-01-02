@@ -294,7 +294,12 @@ mod test {
         let stop_signal = Arc::new(AtomicBool::new(false));
         let mut devices: Vec<GenericDevice> = Vec::new();
 
-        run(["tcp:127.0.0.1:4000", "echo"], &mut devices, stop_signal.clone()).unwrap();
+        run(
+            ["tcp:127.0.0.1:4000", "echo"],
+            &mut devices,
+            stop_signal.clone(),
+        )
+        .unwrap();
 
         thread::sleep(time::Duration::from_secs(1));
 
