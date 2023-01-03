@@ -115,8 +115,8 @@ fn create_tcp_device(
     let tcp = TcpStream::connect(config)
         .with_context(|| format!("Failed to connect to remote_ip {}", config))?;
     tcp.set_nodelay(true)?; // turn off write package grouping, send out tcp package as-is
-    tcp.set_write_timeout(Some(time::Duration::from_secs(10)))?; // non-blocking write
-    tcp.set_read_timeout(Some(time::Duration::from_millis(10)))?; // non-blocking read
+    tcp.set_write_timeout(Some(time::Duration::from_secs(1)))?; // non-blocking write
+    tcp.set_read_timeout(Some(time::Duration::from_millis(1)))?; // non-blocking read
 
     Ok(GenericDevice::create(
         tcp.try_clone()?,
@@ -294,7 +294,12 @@ mod test {
         let stop_signal = Arc::new(AtomicBool::new(false));
         let mut devices: Vec<GenericDevice> = Vec::new();
 
-        run(["tcp:127.0.0.1:4000", "echo"], &mut devices, stop_signal.clone()).unwrap();
+        run(
+            ["tcp:127.0.0.1:4000", "echo"],
+            &mut devices,
+            stop_signal.clone(),
+        )
+        .unwrap();
 
         thread::sleep(time::Duration::from_secs(1));
 
