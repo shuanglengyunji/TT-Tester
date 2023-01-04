@@ -135,7 +135,17 @@ fn create_serial_device(
 ) -> Result<GenericDevice> {
     let mut serial_iter = config.split(':');
     let device = serial_iter.next().unwrap();
-    let baud_rate = serial_iter.next().unwrap().parse::<u32>().unwrap();
+    let baud_rate = serial_iter
+        .next()
+        .unwrap_or_else(|| {
+            println!("Missing baud rate");
+            exit(1)
+        })
+        .parse::<u32>()
+        .unwrap_or_else(|e| {
+            println!("Invalid baud rate: {:?}", e);
+            exit(1)
+        });
 
     let mut serialport = serialport::new(device, baud_rate).open().with_context(|| {
         format!(
@@ -225,12 +235,10 @@ fn main() -> Result<()> {
         .about("Speed tester for transparent transmission between tcp and serial port")
         .arg(
             Arg::new("device")
-                .required(true)
-                .short('d').long("device")
-                .value_names(["TYPE:DEVICE", "TYPE:DEVICE or echo"])
+                .value_names(["TYPE:DEVICE", "TYPE:DEVICE"])
                 .num_args(2)
-                .help("Serial port: serial:/dev/ttyUSB0:115200 (Linux) or serial:COM1:115200 (Windows),\n\
-                       TCP: tcp:192.168.7.1:8000 for tcp server\n\
+                .help("Serial device: serial:/dev/ttyUSB0:115200 (Linux) or serial:COM1:115200 (Windows),\n\
+                       TCP server: tcp:192.168.7.1:7\n\
                        Echo mode: use \"echo\" in place of the second device"),
         )
         .get_matches();
