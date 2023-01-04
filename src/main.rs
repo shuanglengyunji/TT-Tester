@@ -49,8 +49,8 @@ impl GenericDevice {
     fn create<T: std::io::Read + std::io::Write + std::marker::Send + 'static>(
         mut tx_device: T,
         mut rx_device: T,
-        tx_generator: Arc<Mutex<Generator>>,
-        rx_generator: Arc<Mutex<Generator>>,
+        maybe_tx_generator: Option<Arc<Mutex<Generator>>>,
+        maybe_rx_generator: Option<Arc<Mutex<Generator>>>,
         stop: Arc<AtomicBool>,
     ) -> Result<GenericDevice> {
         let stop_tx = stop.clone();
@@ -58,49 +58,53 @@ impl GenericDevice {
         let mut threads = Vec::new();
 
         // tx
-        threads.push(thread::spawn(move || {
-            println!("starts tx with device type {}", type_name::<T>());
-            loop {
-                let data = tx_generator.lock().unwrap().generate();
-                tx_device.write_all(&data).unwrap_or_else(|e| {
-                    println!("Tx error: {:?}", e);
-                    exit(1);
-                });
-                if stop_tx.load(Ordering::SeqCst) {
-                    break;
+        if let Some(tx_generator) = maybe_tx_generator {
+            threads.push(thread::spawn(move || {
+                println!("starts tx with device type {}", type_name::<T>());
+                loop {
+                    let data = tx_generator.lock().unwrap().generate();
+                    tx_device.write_all(&data).unwrap_or_else(|e| {
+                        println!("Tx error: {:?}", e);
+                        exit(1);
+                    });
+                    if stop_tx.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(1))
                 }
-                thread::sleep(Duration::from_millis(1))
-            }
-            println!("stops tx with device type {}", type_name::<T>());
-        }));
+                println!("stops tx with device type {}", type_name::<T>());
+            }));
+        }
 
         // rx
-
-        threads.push(thread::spawn(move || {
-            let mut bytes = 0;
-            let mut begin = time::SystemTime::now();
-            let mut buf = [0u8; 2048]; // max 2k
-            println!("starts rx with device type {}", type_name::<T>());
-            loop {
-                if let Ok(n) = rx_device.read(&mut buf) {
-                    if !rx_generator.lock().unwrap().validate(&buf[0..n]) {
-                        println!("data mismatch");
-                        exit(1);
+        if let Some(rx_generator) = maybe_rx_generator {
+            threads.push(thread::spawn(move || {
+                let mut bytes = 0;
+                let mut begin = time::SystemTime::now();
+                let mut buf = [0u8; 2048]; // max 2k
+                println!("starts rx with device type {}", type_name::<T>());
+                loop {
+                    if let Ok(n) = rx_device.read(&mut buf) {
+                        if !rx_generator.lock().unwrap().validate(&buf[0..n]) {
+                            println!("data mismatch");
+                            exit(1);
+                        }
+                        bytes = bytes + n;
                     }
-                    bytes = bytes + n;
+                    if stop_rx.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if begin.elapsed().unwrap() >= time::Duration::from_secs(1) {
+                        println!("transmission speed: {:?}KB/s", (bytes as f64) / 1000.0);
+                        bytes = 0;
+                        begin = time::SystemTime::now();
+                    }
+                    thread::sleep(time::Duration::from_millis(1));
                 }
-                if stop_rx.load(Ordering::SeqCst) {
-                    break;
-                }
-                if begin.elapsed().unwrap() >= time::Duration::from_secs(1) {
-                    println!("transmission speed: {:?}KB/s", (bytes as f64) / 1000.0);
-                    bytes = 0;
-                    begin = time::SystemTime::now();
-                }
-                thread::sleep(time::Duration::from_millis(1));
-            }
-            println!("stops rx with device type {}", type_name::<T>());
-        }));
+                println!("stops rx with device type {}", type_name::<T>());
+            }));
+        }
+        
 
         Ok(GenericDevice { threads })
     }
@@ -108,8 +112,8 @@ impl GenericDevice {
 
 fn create_tcp_device(
     config: &str,
-    tx_generator: Arc<Mutex<Generator>>,
-    rx_generator: Arc<Mutex<Generator>>,
+    tx_generator: Option<Arc<Mutex<Generator>>>,
+    rx_generator: Option<Arc<Mutex<Generator>>>,
     stop: Arc<AtomicBool>,
 ) -> Result<GenericDevice> {
     let tcp = TcpStream::connect(config)
@@ -129,8 +133,8 @@ fn create_tcp_device(
 
 fn create_serial_device(
     config: &str,
-    tx_generator: Arc<Mutex<Generator>>,
-    rx_generator: Arc<Mutex<Generator>>,
+    tx_generator: Option<Arc<Mutex<Generator>>>,
+    rx_generator: Option<Arc<Mutex<Generator>>>,
     stop: Arc<AtomicBool>,
 ) -> Result<GenericDevice> {
     let mut serial_iter = config.split(':');
@@ -168,8 +172,8 @@ fn create_serial_device(
 
 fn create_device(
     config: &str,
-    tx_generator: Arc<Mutex<Generator>>,
-    rx_generator: Arc<Mutex<Generator>>,
+    tx_generator: Option<Arc<Mutex<Generator>>>,
+    rx_generator: Option<Arc<Mutex<Generator>>>,
     stop: Arc<AtomicBool>,
 ) -> Result<GenericDevice> {
     if config.starts_with("tcp:") {
@@ -187,23 +191,23 @@ fn run(configs: [&str; 2], devices: &mut Vec<GenericDevice>, stop: Arc<AtomicBoo
         let generator = Arc::new(Mutex::new(Generator::create()?));
         devices.push(create_device(
             configs[0],
-            generator.clone(),
-            generator.clone(),
+            Some(generator.clone()),
+            Some(generator.clone()),
             stop.clone(),
         )?);
     } else {
         let generator_1 = Arc::new(Mutex::new(Generator::create()?));
-        let generator_2 = Arc::new(Mutex::new(Generator::create()?));
+        // let generator_2 = Arc::new(Mutex::new(Generator::create()?));
         devices.push(create_device(
             configs[0],
-            generator_1.clone(),
-            generator_2.clone(),
+            Some(generator_1.clone()),
+            None,
             stop.clone(),
         )?);
         devices.push(create_device(
             configs[1],
-            generator_2.clone(),
-            generator_1,
+            None,
+            Some(generator_1),
             stop.clone(),
         )?);
     }
