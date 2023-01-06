@@ -4,7 +4,6 @@ use rand::distributions::Standard;
 use rand::{thread_rng, Rng};
 use std::{
     any::type_name,
-    collections::VecDeque,
     net::TcpStream,
     process::exit,
     result::Result::Ok,
@@ -17,15 +16,14 @@ use std::{
     time::{self, Duration},
 };
 
+#[derive(Default)]
 struct Generator {
-    queue: VecDeque<u8>,
+    queue: Vec<u8>,
 }
 
 impl Generator {
     fn create() -> Result<Generator> {
-        Ok(Generator {
-            queue: VecDeque::new(),
-        })
+        Ok(Generator::default())
     }
 
     fn generate(&mut self) -> Vec<u8> {
@@ -56,26 +54,6 @@ impl GenericDevice {
         let stop_tx = stop.clone();
         let stop_rx = stop.clone();
         let mut threads = Vec::new();
-
-        // tx
-        if let Some(tx_generator) = maybe_tx_generator {
-            threads.push(thread::spawn(move || {
-                println!("starts tx with device type {}", type_name::<T>());
-                loop {
-                    let data = tx_generator.lock().unwrap().generate();
-                    tx_device.write_all(&data).unwrap_or_else(|e| {
-                        println!("Tx error: {:?}", e);
-                        exit(1);
-                    });
-                    if stop_tx.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(1))
-                }
-                println!("stops tx with device type {}", type_name::<T>());
-            }));
-        }
-
         // rx
         if let Some(rx_generator) = maybe_rx_generator {
             threads.push(thread::spawn(move || {
@@ -104,7 +82,25 @@ impl GenericDevice {
                 println!("stops rx with device type {}", type_name::<T>());
             }));
         }
-        
+
+        // tx
+        if let Some(tx_generator) = maybe_tx_generator {
+            threads.push(thread::spawn(move || {
+                println!("starts tx with device type {}", type_name::<T>());
+                loop {
+                    let data = tx_generator.lock().unwrap().generate();
+                    tx_device.write_all(&data).unwrap_or_else(|e| {
+                        println!("Tx error: {:?}", e);
+                        exit(1);
+                    });
+                    if stop_tx.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(1))
+                }
+                println!("stops tx with device type {}", type_name::<T>());
+            }));
+        }
 
         Ok(GenericDevice { threads })
     }
@@ -199,15 +195,15 @@ fn run(configs: [&str; 2], devices: &mut Vec<GenericDevice>, stop: Arc<AtomicBoo
         let generator_1 = Arc::new(Mutex::new(Generator::create()?));
         // let generator_2 = Arc::new(Mutex::new(Generator::create()?));
         devices.push(create_device(
-            configs[0],
-            Some(generator_1.clone()),
+            configs[1],
             None,
+            Some(generator_1.clone()),
             stop.clone(),
         )?);
         devices.push(create_device(
-            configs[1],
-            None,
+            configs[0],
             Some(generator_1),
+            None,
             stop.clone(),
         )?);
     }
@@ -277,9 +273,9 @@ mod test {
     /// test data generator/validator
     #[test]
     fn test_generator() {
-        let mut generate = Generator::create().unwrap();
-        let data = generate.generate();
-        assert!(generate.validate(&data));
+        let mut gen = Generator::create().unwrap();
+        let data = gen.generate();
+        assert!(gen.validate(&data));
     }
 
     /// test with serial echo server at /tmp/serial0
