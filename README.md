@@ -20,6 +20,12 @@ Options:
   -h, --help     Print help information
   -V, --version  Print version information
 ```
+# Dependency
+
+For local build on Ubuntu 22.04, install dependency with command: 
+```
+apt install libudev-dev pkg-config
+```
 
 # Cross compile
 

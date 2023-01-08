@@ -236,6 +236,7 @@ fn main() -> Result<()> {
         .arg(
             Arg::new("device")
                 .value_names(["TYPE:DEVICE", "TYPE:DEVICE"])
+                .required(true)
                 .num_args(2)
                 .help("Serial device: serial:/dev/ttyUSB0:115200 (Linux) or serial:COM1:115200 (Windows),\n\
                        TCP server: tcp:192.168.7.1:7\n\
