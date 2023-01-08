@@ -342,4 +342,22 @@ mod test {
 
         stop(&mut devices, stop_signal);
     }
+
+    /// test with ser2net service between tcp:127.0.0.1:3000 and serial:/tmp/serial1:115200
+    #[test]
+    fn test_ser2net() {
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        let mut devices: Vec<GenericDevice> = Vec::new();
+
+        run(
+            ["tcp:127.0.0.1:3000", "serial:/tmp/serial1:115200"],
+            &mut devices,
+            stop_signal.clone(),
+        )
+        .unwrap();
+
+        thread::sleep(time::Duration::from_secs(1));
+
+        stop(&mut devices, stop_signal);
+    }
 }
