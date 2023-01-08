@@ -19,6 +19,7 @@ use std::{
 #[derive(Default)]
 struct Generator {
     queue: Vec<u8>,
+    sync: u8,
 }
 
 impl Generator {
@@ -27,15 +28,42 @@ impl Generator {
     }
 
     fn generate(&mut self) -> Vec<u8> {
-        let mut rng = thread_rng();
-        let data: Vec<u8> = (&mut rng).sample_iter(Standard).take(1_000).collect();
-        self.queue.extend(data.iter());
-        data
+        // sync step 0: send synchronization string "sync"
+        if self.sync == 0 {
+            println!("tx: send out sync string");
+            self.sync = 1;
+            "sync".as_bytes().to_owned()
+        } else if self.sync == 1 {
+            // waiting for validator to receive the synchronization string 
+            // validator will set sync to 2 when they are in sync
+            println!("tx: wait for validator to receive sync string");
+            vec![]
+        } else {
+            let mut rng = thread_rng();
+            let data: Vec<u8> = (&mut rng).sample_iter(Standard).take(1_000).collect();
+            self.queue.extend(data.iter());
+            data
+        }
     }
 
     fn validate(&mut self, data: &[u8]) -> bool {
-        let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
-        reference == data
+        if self.sync == 0 {
+            println!("rx: unexpected data: {:?}", data);
+            true
+        } else if self.sync == 1 {
+            if let Some(pos) = data.windows("sync".len()).position(|window| window == "sync".as_bytes()) {
+                // TODO: verify pos is at the end of the buffer 
+                println!("rx: sync string received at pos {:?} in {:?}", pos, data);
+                self.sync = 2;
+                true
+            } else {
+                println!("rx: sync = 1, unexpected data: {:?}", data);
+                true
+            }
+        } else {
+            let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
+            reference == data
+        }
     }
 }
 
