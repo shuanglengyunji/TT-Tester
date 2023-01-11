@@ -23,6 +23,8 @@ struct Generator {
 }
 
 impl Generator {
+    const SYNC: &str = "sync";
+
     fn create() -> Result<Generator> {
         Ok(Generator::default())
     }
@@ -32,7 +34,7 @@ impl Generator {
         if self.sync == 0 {
             println!("tx: send out sync string");
             self.sync = 1;
-            "sync".as_bytes().to_owned()
+            Self::SYNC.as_bytes().to_owned()
         } else if self.sync == 1 {
             // waiting for validator to receive the synchronization string
             // validator will set sync to 2 when they are in sync
@@ -48,21 +50,16 @@ impl Generator {
 
     fn validate(&mut self, data: &[u8]) -> bool {
         if self.sync == 0 {
-            println!("rx: unexpected data: {:?}", data);
+            println!("rx: sync = 0, unexpected data: {:?}", data);
             true
         } else if self.sync == 1 {
-            if let Some(pos) = data
-                .windows("sync".len())
-                .position(|window| window == "sync".as_bytes())
-            {
-                // TODO: verify pos is at the end of the buffer
-                println!("rx: sync string received at pos {:?} in {:?}", pos, data);
+            if data.len() >= Self::SYNC.len() && &data[data.len()-Self::SYNC.len()..] == Self::SYNC.as_bytes() {
+                println!("rx: sync string received in {:?}", data);
                 self.sync = 2;
-                true
             } else {
                 println!("rx: sync = 1, unexpected data: {:?}", data);
-                true
             }
+            true
         } else {
             let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
             reference == data
@@ -284,10 +281,7 @@ fn run(
             )?);
         }
     };
-    if configs[1] == "echo" {
-        // echo mode
-    } else {
-    }
+
     Ok(())
 }
 
