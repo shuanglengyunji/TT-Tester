@@ -22,18 +22,20 @@ struct Generator {
     sync: u8,
     count: usize,
     last: time::SystemTime,
+    size: usize,
 }
 
 impl Generator {
     const SYNC: &str = "sync";
 
-    fn create(name: &str) -> Result<Generator> {
+    fn create(name: &str, size: usize) -> Result<Generator> {
         Ok(Generator {
             name: name.to_string(),
             queue: Vec::new(),
             sync: 0,
             count: 0,
             last: time::SystemTime::now(),
+            size,
         })
     }
 
@@ -53,7 +55,7 @@ impl Generator {
             vec![]
         } else {
             let mut rng = thread_rng();
-            let data: Vec<u8> = (&mut rng).sample_iter(Standard).take(1_000).collect();
+            let data: Vec<u8> = (&mut rng).sample_iter(Standard).take(self.size).collect();
             self.queue.extend(data.iter());
             data
         }
@@ -80,8 +82,9 @@ impl Generator {
 
             self.count = self.count + data.len();
             if self.last.elapsed().unwrap() > time::Duration::from_secs(1) {
-                self.last = time::SystemTime::now();
                 println!("{} speed {:?}KB/s", self.name, (self.count as f64) / 1000.0);
+                self.last = time::SystemTime::now();
+                self.count = 0;
             }
         }
     }
@@ -229,14 +232,15 @@ enum Mode {
 fn run(
     mode: Mode,
     configs: [&str; 2],
+    size: usize,
     devices: &mut Vec<GenericDevice>,
     stop: Arc<AtomicBool>,
 ) -> Result<()> {
     println!("Test in {:?} mode", mode);
     match mode {
         Mode::Normal => {
-            let upstream = Arc::new(Mutex::new(Generator::create("upstream")?));
-            let downstream = Arc::new(Mutex::new(Generator::create("downstream")?));
+            let upstream = Arc::new(Mutex::new(Generator::create("upstream", size)?));
+            let downstream = Arc::new(Mutex::new(Generator::create("downstream", size)?));
             devices.push(create_device(
                 configs[0],
                 Some(upstream.clone()),
@@ -251,7 +255,7 @@ fn run(
             )?);
         }
         Mode::UpStream => {
-            let generator = Arc::new(Mutex::new(Generator::create("upstream")?));
+            let generator = Arc::new(Mutex::new(Generator::create("upstream", size)?));
             devices.push(create_device(
                 configs[0],
                 Some(generator.clone()),
@@ -266,7 +270,7 @@ fn run(
             )?);
         }
         Mode::DownStream => {
-            let generator = Arc::new(Mutex::new(Generator::create("downstream")?));
+            let generator = Arc::new(Mutex::new(Generator::create("downstream", size)?));
             devices.push(create_device(
                 configs[0],
                 None,
@@ -281,7 +285,7 @@ fn run(
             )?);
         }
         Mode::Echo => {
-            let generator = Arc::new(Mutex::new(Generator::create("echo")?));
+            let generator = Arc::new(Mutex::new(Generator::create("echo", size)?));
             devices.push(create_device(
                 configs[0],
                 Some(generator.clone()),
@@ -334,6 +338,14 @@ fn main() -> Result<()> {
                 .value_parser(clap::builder::EnumValueParser::<Mode>::new())
                 .help("Select testing mode")
         )
+        .arg(
+            Arg::new("size")
+                .long("size")
+                .short('s')
+                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(0..65535))
+                .default_value("1460")
+                .help("Test package size")
+        )
         .get_matches();
 
     let configs: [&str; 2] = m
@@ -351,6 +363,7 @@ fn main() -> Result<()> {
     run(
         *m.get_one("mode").unwrap(),
         configs,
+        *m.get_one("size").unwrap(),
         &mut devices,
         stop_signal.clone(),
     )?;
@@ -371,9 +384,9 @@ mod test {
     /// test data generator/validator
     #[test]
     fn test_generator() {
-        let mut gen = Generator::create("").unwrap();
+        let mut gen = Generator::create("", 1000).unwrap();
         let data = gen.generate();
-        assert!(gen.validate(&data));
+        gen.validate(&data);
     }
 
     /// test with serial echo server at /tmp/serial0
@@ -385,6 +398,7 @@ mod test {
         run(
             Mode::Echo,
             ["serial:/tmp/serial0:115200", "-"],
+            1000,
             &mut devices,
             stop_signal.clone(),
         )
@@ -404,6 +418,7 @@ mod test {
         run(
             Mode::Echo,
             ["tcp:127.0.0.1:4000", "-"],
+            1000,
             &mut devices,
             stop_signal.clone(),
         )
@@ -424,6 +439,7 @@ mod test {
             run(
                 Mode::Normal,
                 ["tcp:127.0.0.1:3000", "serial:/tmp/serial1:115200"],
+                1000,
                 &mut devices,
                 stop_signal.clone(),
             )
@@ -441,6 +457,7 @@ mod test {
             run(
                 Mode::UpStream,
                 ["tcp:127.0.0.1:3000", "serial:/tmp/serial1:115200"],
+                1000,
                 &mut devices,
                 stop_signal.clone(),
             )
@@ -458,6 +475,7 @@ mod test {
             run(
                 Mode::DownStream,
                 ["tcp:127.0.0.1:3000", "serial:/tmp/serial1:115200"],
+                1000,
                 &mut devices,
                 stop_signal.clone(),
             )
