@@ -4,7 +4,6 @@ use rand::distributions::Standard;
 use rand::{thread_rng, Rng};
 use std::{
     any::type_name,
-    collections::VecDeque,
     net::TcpStream,
     process::exit,
     result::Result::Ok,
@@ -18,26 +17,76 @@ use std::{
 };
 
 struct Generator {
-    queue: VecDeque<u8>,
+    name: String,
+    queue: Vec<u8>,
+    sync: u8,
+    count: usize,
+    last: time::SystemTime,
+    size: usize,
 }
 
 impl Generator {
-    fn create() -> Result<Generator> {
+    const SYNC: &str = "sync";
+
+    fn create(name: &str, size: usize) -> Result<Generator> {
         Ok(Generator {
-            queue: VecDeque::new(),
+            name: name.to_string(),
+            queue: Vec::new(),
+            sync: 0,
+            count: 0,
+            last: time::SystemTime::now(),
+            size,
         })
     }
 
     fn generate(&mut self) -> Vec<u8> {
-        let mut rng = thread_rng();
-        let data: Vec<u8> = (&mut rng).sample_iter(Standard).take(1_000).collect();
-        self.queue.extend(data.iter());
-        data
+        // sync step 0: send synchronization string "sync"
+        if self.sync == 0 {
+            println!("{} tx: send out sync string", self.name);
+            self.sync = 1;
+            Self::SYNC.as_bytes().to_owned()
+        } else if self.sync == 1 {
+            // waiting for validator to receive the synchronization string
+            // validator will set sync to 2 when they are in sync
+            println!(
+                "{} tx: wait for validator to receive sync string",
+                self.name
+            );
+            vec![]
+        } else {
+            let mut rng = thread_rng();
+            let data: Vec<u8> = (&mut rng).sample_iter(Standard).take(self.size).collect();
+            self.queue.extend(data.iter());
+            data
+        }
     }
 
-    fn validate(&mut self, data: &[u8]) -> bool {
-        let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
-        reference == data
+    fn validate(&mut self, data: &[u8]) {
+        if self.sync == 0 {
+            println!("{} rx: sync = 0, unexpected data: {:?}", self.name, data);
+        } else if self.sync == 1 {
+            if data.len() >= Self::SYNC.len()
+                && &data[data.len() - Self::SYNC.len()..] == Self::SYNC.as_bytes()
+            {
+                println!("{} rx: sync string received in {:?}", self.name, data);
+                self.sync = 2;
+            } else {
+                println!("{} rx: sync = 1, unexpected data: {:?}", self.name, data);
+            }
+        } else {
+            let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
+            if data != reference {
+                println!("data mismatch");
+                exit(1);
+            }
+
+            self.count = self.count + data.len();
+            if self.last.elapsed().unwrap() > time::Duration::from_secs(1) {
+                println!("{} speed {:?}KB/s", self.name, (self.count as f64) / 1000.0);
+                self.last = time::SystemTime::now();
+                self.count = 0;
+            }
+        }
     }
 }
 
@@ -49,58 +98,49 @@ impl GenericDevice {
     fn create<T: std::io::Read + std::io::Write + std::marker::Send + 'static>(
         mut tx_device: T,
         mut rx_device: T,
-        tx_generator: Arc<Mutex<Generator>>,
-        rx_generator: Arc<Mutex<Generator>>,
+        maybe_tx_generator: Option<Arc<Mutex<Generator>>>,
+        maybe_rx_generator: Option<Arc<Mutex<Generator>>>,
         stop: Arc<AtomicBool>,
     ) -> Result<GenericDevice> {
         let stop_tx = stop.clone();
         let stop_rx = stop.clone();
         let mut threads = Vec::new();
+        // rx
+        if let Some(rx_generator) = maybe_rx_generator {
+            threads.push(thread::spawn(move || {
+                let mut buf = [0u8; 2048]; // max 2k
+                println!("starts rx with device type {}", type_name::<T>());
+                loop {
+                    if let Ok(n) = rx_device.read(&mut buf) {
+                        rx_generator.lock().unwrap().validate(&buf[0..n]);
+                    }
+                    if stop_rx.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    thread::sleep(time::Duration::from_millis(1));
+                }
+                println!("stops rx with device type {}", type_name::<T>());
+            }));
+        }
 
         // tx
-        threads.push(thread::spawn(move || {
-            println!("starts tx with device type {}", type_name::<T>());
-            loop {
-                let data = tx_generator.lock().unwrap().generate();
-                tx_device.write_all(&data).unwrap_or_else(|e| {
-                    println!("Tx error: {:?}", e);
-                    exit(1);
-                });
-                if stop_tx.load(Ordering::SeqCst) {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(1))
-            }
-            println!("stops tx with device type {}", type_name::<T>());
-        }));
-
-        // rx
-
-        threads.push(thread::spawn(move || {
-            let mut bytes = 0;
-            let mut begin = time::SystemTime::now();
-            let mut buf = [0u8; 2048]; // max 2k
-            println!("starts rx with device type {}", type_name::<T>());
-            loop {
-                if let Ok(n) = rx_device.read(&mut buf) {
-                    if !rx_generator.lock().unwrap().validate(&buf[0..n]) {
-                        println!("data mismatch");
+        if let Some(tx_generator) = maybe_tx_generator {
+            threads.push(thread::spawn(move || {
+                println!("starts tx with device type {}", type_name::<T>());
+                loop {
+                    let data = tx_generator.lock().unwrap().generate();
+                    tx_device.write_all(&data).unwrap_or_else(|e| {
+                        println!("Tx error: {:?}", e);
                         exit(1);
+                    });
+                    if stop_tx.load(Ordering::SeqCst) {
+                        break;
                     }
-                    bytes = bytes + n;
+                    thread::sleep(Duration::from_millis(1))
                 }
-                if stop_rx.load(Ordering::SeqCst) {
-                    break;
-                }
-                if begin.elapsed().unwrap() >= time::Duration::from_secs(1) {
-                    println!("transmission speed: {:?}KB/s", (bytes as f64) / 1000.0);
-                    bytes = 0;
-                    begin = time::SystemTime::now();
-                }
-                thread::sleep(time::Duration::from_millis(1));
-            }
-            println!("stops rx with device type {}", type_name::<T>());
-        }));
+                println!("stops tx with device type {}", type_name::<T>());
+            }));
+        }
 
         Ok(GenericDevice { threads })
     }
@@ -108,8 +148,8 @@ impl GenericDevice {
 
 fn create_tcp_device(
     config: &str,
-    tx_generator: Arc<Mutex<Generator>>,
-    rx_generator: Arc<Mutex<Generator>>,
+    tx_generator: Option<Arc<Mutex<Generator>>>,
+    rx_generator: Option<Arc<Mutex<Generator>>>,
     stop: Arc<AtomicBool>,
 ) -> Result<GenericDevice> {
     let tcp = TcpStream::connect(config)
@@ -129,8 +169,8 @@ fn create_tcp_device(
 
 fn create_serial_device(
     config: &str,
-    tx_generator: Arc<Mutex<Generator>>,
-    rx_generator: Arc<Mutex<Generator>>,
+    tx_generator: Option<Arc<Mutex<Generator>>>,
+    rx_generator: Option<Arc<Mutex<Generator>>>,
     stop: Arc<AtomicBool>,
 ) -> Result<GenericDevice> {
     let mut serial_iter = config.split(':');
@@ -168,8 +208,8 @@ fn create_serial_device(
 
 fn create_device(
     config: &str,
-    tx_generator: Arc<Mutex<Generator>>,
-    rx_generator: Arc<Mutex<Generator>>,
+    tx_generator: Option<Arc<Mutex<Generator>>>,
+    rx_generator: Option<Arc<Mutex<Generator>>>,
     stop: Arc<AtomicBool>,
 ) -> Result<GenericDevice> {
     if config.starts_with("tcp:") {
@@ -181,32 +221,80 @@ fn create_device(
     }
 }
 
-fn run(configs: [&str; 2], devices: &mut Vec<GenericDevice>, stop: Arc<AtomicBool>) -> Result<()> {
-    if configs[1] == "echo" {
-        // echo mode
-        let generator = Arc::new(Mutex::new(Generator::create()?));
-        devices.push(create_device(
-            configs[0],
-            generator.clone(),
-            generator.clone(),
-            stop.clone(),
-        )?);
-    } else {
-        let generator_1 = Arc::new(Mutex::new(Generator::create()?));
-        let generator_2 = Arc::new(Mutex::new(Generator::create()?));
-        devices.push(create_device(
-            configs[0],
-            generator_1.clone(),
-            generator_2.clone(),
-            stop.clone(),
-        )?);
-        devices.push(create_device(
-            configs[1],
-            generator_2.clone(),
-            generator_1,
-            stop.clone(),
-        )?);
-    }
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum Mode {
+    Normal,
+    UpStream,
+    DownStream,
+    Echo,
+}
+
+fn run(
+    mode: Mode,
+    configs: [&str; 2],
+    size: usize,
+    devices: &mut Vec<GenericDevice>,
+    stop: Arc<AtomicBool>,
+) -> Result<()> {
+    println!("Test in {:?} mode", mode);
+    match mode {
+        Mode::Normal => {
+            let upstream = Arc::new(Mutex::new(Generator::create("upstream", size)?));
+            let downstream = Arc::new(Mutex::new(Generator::create("downstream", size)?));
+            devices.push(create_device(
+                configs[0],
+                Some(upstream.clone()),
+                Some(downstream.clone()),
+                stop.clone(),
+            )?);
+            devices.push(create_device(
+                configs[1],
+                Some(downstream.clone()),
+                Some(upstream.clone()),
+                stop.clone(),
+            )?);
+        }
+        Mode::UpStream => {
+            let generator = Arc::new(Mutex::new(Generator::create("upstream", size)?));
+            devices.push(create_device(
+                configs[0],
+                Some(generator.clone()),
+                None,
+                stop.clone(),
+            )?);
+            devices.push(create_device(
+                configs[1],
+                None,
+                Some(generator.clone()),
+                stop.clone(),
+            )?);
+        }
+        Mode::DownStream => {
+            let generator = Arc::new(Mutex::new(Generator::create("downstream", size)?));
+            devices.push(create_device(
+                configs[0],
+                None,
+                Some(generator.clone()),
+                stop.clone(),
+            )?);
+            devices.push(create_device(
+                configs[1],
+                Some(generator.clone()),
+                None,
+                stop.clone(),
+            )?);
+        }
+        Mode::Echo => {
+            let generator = Arc::new(Mutex::new(Generator::create("echo", size)?));
+            devices.push(create_device(
+                configs[0],
+                Some(generator.clone()),
+                Some(generator.clone()),
+                stop.clone(),
+            )?);
+        }
+    };
+
     Ok(())
 }
 
@@ -236,10 +324,27 @@ fn main() -> Result<()> {
         .arg(
             Arg::new("device")
                 .value_names(["TYPE:DEVICE", "TYPE:DEVICE"])
+                .required(true)
                 .num_args(2)
                 .help("Serial device: serial:/dev/ttyUSB0:115200 (Linux) or serial:COM1:115200 (Windows),\n\
                        TCP server: tcp:192.168.7.1:7\n\
-                       Echo mode: use \"echo\" in place of the second device"),
+                       Use - as place holder if only one device is supplied in echo mode")
+        )
+        .arg(
+            Arg::new("mode")
+                .long("mode")
+                .short('m')
+                .default_value("normal")
+                .value_parser(clap::builder::EnumValueParser::<Mode>::new())
+                .help("Select testing mode")
+        )
+        .arg(
+            Arg::new("size")
+                .long("size")
+                .short('s')
+                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(0..65535))
+                .default_value("1460")
+                .help("Test package size")
         )
         .get_matches();
 
@@ -255,7 +360,13 @@ fn main() -> Result<()> {
     let stop_signal = Arc::new(AtomicBool::new(false));
     let mut devices: Vec<GenericDevice> = Vec::new();
 
-    run(configs, &mut devices, stop_signal.clone())?;
+    run(
+        *m.get_one("mode").unwrap(),
+        configs,
+        *m.get_one("size").unwrap(),
+        &mut devices,
+        stop_signal.clone(),
+    )?;
     wait_ctrl_c();
     stop(&mut devices, stop_signal.clone());
 
@@ -268,14 +379,14 @@ mod test {
     use std::time;
     use std::{sync::Arc, thread};
 
-    use crate::{run, stop, Generator, GenericDevice};
+    use crate::{run, stop, Generator, GenericDevice, Mode};
 
     /// test data generator/validator
     #[test]
     fn test_generator() {
-        let mut generate = Generator::create().unwrap();
-        let data = generate.generate();
-        assert!(generate.validate(&data));
+        let mut gen = Generator::create("", 1000).unwrap();
+        let data = gen.generate();
+        gen.validate(&data);
     }
 
     /// test with serial echo server at /tmp/serial0
@@ -285,7 +396,9 @@ mod test {
         let mut devices: Vec<GenericDevice> = Vec::new();
 
         run(
-            ["serial:/tmp/serial0:115200", "echo"],
+            Mode::Echo,
+            ["serial:/tmp/serial0:115200", "-"],
+            1000,
             &mut devices,
             stop_signal.clone(),
         )
@@ -303,7 +416,9 @@ mod test {
         let mut devices: Vec<GenericDevice> = Vec::new();
 
         run(
-            ["tcp:127.0.0.1:4000", "echo"],
+            Mode::Echo,
+            ["tcp:127.0.0.1:4000", "-"],
+            1000,
             &mut devices,
             stop_signal.clone(),
         )
@@ -312,5 +427,63 @@ mod test {
         thread::sleep(time::Duration::from_secs(1));
 
         stop(&mut devices, stop_signal);
+    }
+
+    /// test with ser2net service between tcp:127.0.0.1:3000 and serial:/tmp/serial1:115200
+    #[test]
+    fn test_ser2net() {
+        {
+            let stop_signal = Arc::new(AtomicBool::new(false));
+            let mut devices: Vec<GenericDevice> = Vec::new();
+
+            run(
+                Mode::Normal,
+                ["tcp:127.0.0.1:3000", "serial:/tmp/serial1:115200"],
+                1000,
+                &mut devices,
+                stop_signal.clone(),
+            )
+            .unwrap();
+
+            thread::sleep(time::Duration::from_secs(1));
+
+            stop(&mut devices, stop_signal);
+        }
+
+        {
+            let stop_signal = Arc::new(AtomicBool::new(false));
+            let mut devices: Vec<GenericDevice> = Vec::new();
+
+            run(
+                Mode::UpStream,
+                ["tcp:127.0.0.1:3000", "serial:/tmp/serial1:115200"],
+                1000,
+                &mut devices,
+                stop_signal.clone(),
+            )
+            .unwrap();
+
+            thread::sleep(time::Duration::from_secs(1));
+
+            stop(&mut devices, stop_signal);
+        }
+
+        {
+            let stop_signal = Arc::new(AtomicBool::new(false));
+            let mut devices: Vec<GenericDevice> = Vec::new();
+
+            run(
+                Mode::DownStream,
+                ["tcp:127.0.0.1:3000", "serial:/tmp/serial1:115200"],
+                1000,
+                &mut devices,
+                stop_signal.clone(),
+            )
+            .unwrap();
+
+            thread::sleep(time::Duration::from_secs(1));
+
+            stop(&mut devices, stop_signal);
+        }
     }
 }
