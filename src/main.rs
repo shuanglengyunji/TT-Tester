@@ -18,6 +18,7 @@ use std::{
 
 #[derive(Default)]
 struct Generator {
+    name: String,
     queue: Vec<u8>,
     sync: u8,
 }
@@ -25,20 +26,24 @@ struct Generator {
 impl Generator {
     const SYNC: &str = "sync";
 
-    fn create() -> Result<Generator> {
-        Ok(Generator::default())
+    fn create(name: &str) -> Result<Generator> {
+        Ok(Generator {
+            name: name.to_string(),
+            queue: Vec::new(),
+            sync: 0
+        })
     }
 
     fn generate(&mut self) -> Vec<u8> {
         // sync step 0: send synchronization string "sync"
         if self.sync == 0 {
-            println!("tx: send out sync string");
+            println!("[{}] {} tx: send out sync string", type_name::<Self>(), self.name);
             self.sync = 1;
             Self::SYNC.as_bytes().to_owned()
         } else if self.sync == 1 {
             // waiting for validator to receive the synchronization string
             // validator will set sync to 2 when they are in sync
-            println!("tx: wait for validator to receive sync string");
+            println!("[{}] {} tx: wait for validator to receive sync string", type_name::<Self>(), self.name);
             vec![]
         } else {
             let mut rng = thread_rng();
@@ -50,14 +55,14 @@ impl Generator {
 
     fn validate(&mut self, data: &[u8]) -> bool {
         if self.sync == 0 {
-            println!("rx: sync = 0, unexpected data: {:?}", data);
+            println!("[{}] {} rx: sync = 0, unexpected data: {:?}", type_name::<Self>(), self.name, data);
             true
         } else if self.sync == 1 {
             if data.len() >= Self::SYNC.len() && &data[data.len()-Self::SYNC.len()..] == Self::SYNC.as_bytes() {
-                println!("rx: sync string received in {:?}", data);
+                println!("[{}] {} rx: sync string received in {:?}", type_name::<Self>(), self.name, data);
                 self.sync = 2;
             } else {
-                println!("rx: sync = 1, unexpected data: {:?}", data);
+                println!("[{}] {} rx: sync = 1, unexpected data: {:?}", type_name::<Self>(), self.name, data);
             }
             true
         } else {
@@ -226,8 +231,8 @@ fn run(
     println!("Test in {:?} mode", mode);
     match mode {
         Mode::Normal => {
-            let upstream = Arc::new(Mutex::new(Generator::create()?));
-            let downstream = Arc::new(Mutex::new(Generator::create()?));
+            let upstream = Arc::new(Mutex::new(Generator::create("upstream")?));
+            let downstream = Arc::new(Mutex::new(Generator::create("downstream")?));
             devices.push(create_device(
                 configs[0],
                 Some(upstream.clone()),
@@ -242,7 +247,7 @@ fn run(
             )?);
         }
         Mode::UpStream => {
-            let generator = Arc::new(Mutex::new(Generator::create()?));
+            let generator = Arc::new(Mutex::new(Generator::create("upstream")?));
             devices.push(create_device(
                 configs[0],
                 Some(generator.clone()),
@@ -257,7 +262,7 @@ fn run(
             )?);
         }
         Mode::DownStream => {
-            let generator = Arc::new(Mutex::new(Generator::create()?));
+            let generator = Arc::new(Mutex::new(Generator::create("downstream")?));
             devices.push(create_device(
                 configs[0],
                 None,
@@ -272,7 +277,7 @@ fn run(
             )?);
         }
         Mode::Echo => {
-            let generator = Arc::new(Mutex::new(Generator::create()?));
+            let generator = Arc::new(Mutex::new(Generator::create("echo")?));
             devices.push(create_device(
                 configs[0],
                 Some(generator.clone()),
@@ -362,7 +367,7 @@ mod test {
     /// test data generator/validator
     #[test]
     fn test_generator() {
-        let mut gen = Generator::create().unwrap();
+        let mut gen = Generator::create("").unwrap();
         let data = gen.generate();
         assert!(gen.validate(&data));
     }
