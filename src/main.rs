@@ -16,11 +16,12 @@ use std::{
     time::{self, Duration},
 };
 
-#[derive(Default)]
 struct Generator {
     name: String,
     queue: Vec<u8>,
     sync: u8,
+    count: usize,
+    last: time::SystemTime,
 }
 
 impl Generator {
@@ -30,20 +31,25 @@ impl Generator {
         Ok(Generator {
             name: name.to_string(),
             queue: Vec::new(),
-            sync: 0
+            sync: 0,
+            count: 0,
+            last: time::SystemTime::now(),
         })
     }
 
     fn generate(&mut self) -> Vec<u8> {
         // sync step 0: send synchronization string "sync"
         if self.sync == 0 {
-            println!("[{}] {} tx: send out sync string", type_name::<Self>(), self.name);
+            println!("{} tx: send out sync string", self.name);
             self.sync = 1;
             Self::SYNC.as_bytes().to_owned()
         } else if self.sync == 1 {
             // waiting for validator to receive the synchronization string
             // validator will set sync to 2 when they are in sync
-            println!("[{}] {} tx: wait for validator to receive sync string", type_name::<Self>(), self.name);
+            println!(
+                "{} tx: wait for validator to receive sync string",
+                self.name
+            );
             vec![]
         } else {
             let mut rng = thread_rng();
@@ -53,21 +59,30 @@ impl Generator {
         }
     }
 
-    fn validate(&mut self, data: &[u8]) -> bool {
+    fn validate(&mut self, data: &[u8]) {
         if self.sync == 0 {
-            println!("[{}] {} rx: sync = 0, unexpected data: {:?}", type_name::<Self>(), self.name, data);
-            true
+            println!("{} rx: sync = 0, unexpected data: {:?}", self.name, data);
         } else if self.sync == 1 {
-            if data.len() >= Self::SYNC.len() && &data[data.len()-Self::SYNC.len()..] == Self::SYNC.as_bytes() {
-                println!("[{}] {} rx: sync string received in {:?}", type_name::<Self>(), self.name, data);
+            if data.len() >= Self::SYNC.len()
+                && &data[data.len() - Self::SYNC.len()..] == Self::SYNC.as_bytes()
+            {
+                println!("{} rx: sync string received in {:?}", self.name, data);
                 self.sync = 2;
             } else {
-                println!("[{}] {} rx: sync = 1, unexpected data: {:?}", type_name::<Self>(), self.name, data);
+                println!("{} rx: sync = 1, unexpected data: {:?}", self.name, data);
             }
-            true
         } else {
             let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
-            reference == data
+            if data != reference {
+                println!("data mismatch");
+                exit(1);
+            }
+
+            self.count = self.count + data.len();
+            if self.last.elapsed().unwrap() > time::Duration::from_secs(1) {
+                self.last = time::SystemTime::now();
+                println!("{} speed {:?}KB/s", self.name, (self.count as f64) / 1000.0);
+            }
         }
     }
 }
@@ -90,25 +105,14 @@ impl GenericDevice {
         // rx
         if let Some(rx_generator) = maybe_rx_generator {
             threads.push(thread::spawn(move || {
-                let mut bytes = 0;
-                let mut begin = time::SystemTime::now();
                 let mut buf = [0u8; 2048]; // max 2k
                 println!("starts rx with device type {}", type_name::<T>());
                 loop {
                     if let Ok(n) = rx_device.read(&mut buf) {
-                        if !rx_generator.lock().unwrap().validate(&buf[0..n]) {
-                            println!("data mismatch");
-                            exit(1);
-                        }
-                        bytes = bytes + n;
+                        rx_generator.lock().unwrap().validate(&buf[0..n]);
                     }
                     if stop_rx.load(Ordering::SeqCst) {
                         break;
-                    }
-                    if begin.elapsed().unwrap() >= time::Duration::from_secs(1) {
-                        println!("transmission speed: {:?}KB/s", (bytes as f64) / 1000.0);
-                        bytes = 0;
-                        begin = time::SystemTime::now();
                     }
                     thread::sleep(time::Duration::from_millis(1));
                 }
