@@ -25,12 +25,6 @@ jobs:
         with:
           toolchain: stable
           override: true
-      
-      - name: Setup Cargo tools
-        run: |
-          cargo install cargo-quickinstall
-          cargo quickinstall cargo-tarpaulin
-          cargo quickinstall cross
 
       - name: Add virtual device
         run: |
