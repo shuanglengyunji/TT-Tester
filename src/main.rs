@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Local};
 use clap::{Arg, Command};
-use rand::distributions::Standard;
-use rand::{thread_rng, Rng};
 use std::{
     any::type_name,
     net::TcpStream,
@@ -13,13 +12,14 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::{self, Duration},
+    time::{self, Duration, SystemTime},
 };
 
 struct Generator {
     name: String,
     queue: Vec<u8>,
     sync: u8,
+    last_sync: time::SystemTime,
     count: usize,
     last: time::SystemTime,
     size: usize,
@@ -34,7 +34,8 @@ impl Generator {
             queue: Vec::new(),
             sync: 0,
             count: 0,
-            last: time::SystemTime::now(),
+            last_sync: time::SystemTime::UNIX_EPOCH,
+            last: time::SystemTime::UNIX_EPOCH,
             size,
         })
     }
@@ -42,20 +43,19 @@ impl Generator {
     fn generate(&mut self) -> Vec<u8> {
         // sync step 0: send synchronization string "sync"
         if self.sync == 0 {
-            println!("{} tx: send out sync string", self.name);
-            self.sync = 1;
-            Self::SYNC.as_bytes().to_owned()
-        } else if self.sync == 1 {
-            // waiting for validator to receive the synchronization string
-            // validator will set sync to 2 when they are in sync
-            println!(
-                "{} tx: wait for validator to receive sync string",
-                self.name
-            );
-            vec![]
+            if self.last_sync.elapsed().unwrap() > Duration::from_secs_f32(0.5) {
+                self.last_sync = SystemTime::now();
+                println!(
+                    "{} tx: send out sync string at {}",
+                    self.name,
+                    Into::<DateTime<Local>>::into(self.last_sync).format("%H:%M:%S%.3f")
+                );
+                Self::SYNC.as_bytes().to_owned()
+            } else {
+                vec![]
+            }
         } else {
-            let mut rng = thread_rng();
-            let data: Vec<u8> = (&mut rng).sample_iter(Standard).take(self.size).collect();
+            let data: Vec<u8> = (0..self.size).map(|x| x as u8).collect();
             self.queue.extend(data.iter());
             data
         }
@@ -63,20 +63,23 @@ impl Generator {
 
     fn validate(&mut self, data: &[u8]) {
         if self.sync == 0 {
-            println!("{} rx: sync = 0, unexpected data: {:?}", self.name, data);
-        } else if self.sync == 1 {
             if data.len() >= Self::SYNC.len()
                 && &data[data.len() - Self::SYNC.len()..] == Self::SYNC.as_bytes()
             {
                 println!("{} rx: sync string received in {:?}", self.name, data);
-                self.sync = 2;
+                self.sync = 1;
             } else {
-                println!("{} rx: sync = 1, unexpected data: {:?}", self.name, data);
+                println!(
+                    "{} rx: waiting for sync string, unexpected data received: {:?}",
+                    self.name, data
+                );
             }
         } else {
             let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
             if data != reference {
                 println!("data mismatch");
+                println!("reference: \n{:?}", reference);
+                println!("data: \n{:?}", data);
                 exit(1);
             }
 
