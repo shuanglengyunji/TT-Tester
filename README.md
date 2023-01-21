@@ -18,6 +18,7 @@ Arguments:
 
 Options:
   -m, --mode <mode>  Select testing mode [default: normal] [possible values: normal, up-stream, down-stream, echo]
+  -s, --size <size>  Test package size [default: 1460]
   -h, --help         Print help information
   -V, --version      Print version information
 ```

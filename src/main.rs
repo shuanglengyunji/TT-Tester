@@ -411,7 +411,7 @@ fn main() -> Result<()> {
             Arg::new("size")
                 .long("size")
                 .short('s')
-                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(0..65535))
+                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(5..65535))
                 .default_value("1460")
                 .help("Test package size")
         )
