@@ -17,23 +17,36 @@ use std::{
 
 struct Generator {
     name: String,
-    queue: Vec<u8>,
-    sync: u8,
-    last_sync: time::SystemTime,
-    count: usize,
-    last: time::SystemTime,
-    size: usize,
+    sync: bool,
+    last_sync: time::SystemTime, // last time sending out sync package
+    tx_index: u8,                // tx package index
+    rx_index: u8,                // rx package index
+    rx_buf: Vec<u8>,
+    rx_received_bytes: usize,
+    rx_received_packages: usize,
+    rx_lost_packages: usize,
+    last: time::SystemTime, // last time calculate and print transmission speed
+    size: usize,            // package size
 }
 
 impl Generator {
     const SYNC: &str = "sync";
+    const HEADER: [u8; 3] = [5, 0, 5];
+    const END: [u8; 1] = [55];
 
     fn create(name: &str, size: usize) -> Result<Generator> {
+        // package must not shorter than the total length of HEADER + index + END
+        // package: HEADER + [index] + [payload] + [END]
+        assert!(size >= Self::HEADER.len() + Self::END.len() + 1);
         Ok(Generator {
             name: name.to_string(),
-            queue: Vec::new(),
-            sync: 0,
-            count: 0,
+            sync: false,
+            tx_index: u8::MIN, // next tx index,
+            rx_index: u8::MAX, // last rx index, rx_index should be less than tx_index by 1 package
+            rx_buf: Vec::new(),
+            rx_received_bytes: 0,
+            rx_received_packages: 0,
+            rx_lost_packages: 0,
             last_sync: time::SystemTime::UNIX_EPOCH,
             last: time::SystemTime::UNIX_EPOCH,
             size,
@@ -42,7 +55,7 @@ impl Generator {
 
     fn generate(&mut self) -> Vec<u8> {
         // sync step 0: send synchronization string "sync"
-        if self.sync == 0 {
+        if !self.sync {
             if self.last_sync.elapsed().unwrap() > Duration::from_secs_f32(0.5) {
                 self.last_sync = SystemTime::now();
                 println!(
@@ -55,19 +68,25 @@ impl Generator {
                 vec![]
             }
         } else {
-            let data: Vec<u8> = (0..self.size).map(|x| x as u8).collect();
-            self.queue.extend(data.iter());
+            let mut data: Vec<u8> = Vec::new();
+            data.extend(Self::HEADER); // header
+            data.push(self.tx_index); // index
+            data.extend(
+                (0..(self.size - Self::HEADER.len() - Self::END.len() - 1)).map(|x| x as u8),
+            );
+            data.extend(Self::END); // end
+            (self.tx_index, _) = self.tx_index.overflowing_add(1);
             data
         }
     }
 
     fn validate(&mut self, data: &[u8]) {
-        if self.sync == 0 {
+        if !self.sync {
             if data.len() >= Self::SYNC.len()
                 && &data[data.len() - Self::SYNC.len()..] == Self::SYNC.as_bytes()
             {
                 println!("{} rx: sync string received in {:?}", self.name, data);
-                self.sync = 1;
+                self.sync = true;
             } else {
                 println!(
                     "{} rx: waiting for sync string, unexpected data received: {:?}",
@@ -75,19 +94,66 @@ impl Generator {
                 );
             }
         } else {
-            let reference = self.queue.drain(0..data.len()).collect::<Vec<_>>();
-            if data != reference {
-                println!("data mismatch");
-                println!("reference: \n{:?}", reference);
-                println!("data: \n{:?}", data);
-                exit(1);
+            // Append to rx buffer
+            self.rx_buf.extend(data);
+            loop {
+                // Find header
+                if let Some(start) = self
+                    .rx_buf
+                    .windows(Self::HEADER.len())
+                    .position(|slice| slice == Self::HEADER)
+                {
+                    // Drop data till a new package header
+                    if start != 0 {
+                        println!("{} rx error: drop data", self.name);
+                        self.rx_buf.drain(0..start);
+                    }
+                    if self.rx_buf.len() >= self.size {
+                        if self.rx_buf[self.size - Self::END.len()..self.size] == Self::END {
+                            // full package
+                            let index = self.rx_buf[Self::HEADER.len()];
+                            let (delta, _) = index.overflowing_sub(self.rx_index);
+                            let (loss, _) = delta.overflowing_sub(1);
+                            if loss > 0 {
+                                self.rx_lost_packages = self.rx_lost_packages + loss as usize;
+                                println!(
+                                    "{} rx error: missing {} packages between index {} and {}",
+                                    self.name, loss, self.rx_index, index
+                                );
+                            }
+                            self.rx_received_packages = self.rx_received_packages + 1;
+                            self.rx_index = index;
+                            self.rx_buf.drain(0..self.size);
+                            self.rx_received_bytes = self.rx_received_bytes + self.size;
+                        } else {
+                            // bad package, remove first header byte and start from next byte
+                            self.rx_buf.drain(0..1);
+                        }
+                    } else {
+                        // not a full package
+                        break;
+                    }
+                } else {
+                    // no header found
+                    break;
+                }
             }
 
-            self.count = self.count + data.len();
             if self.last.elapsed().unwrap() > time::Duration::from_secs(1) {
-                println!("{} speed {:?}KB/s", self.name, (self.count as f64) / 1000.0);
+                println!(
+                    "{} received {:04.1}% packages ({} out of {}) at speed {}KB/s",
+                    self.name,
+                    self.rx_received_packages as f64
+                        / (self.rx_received_packages + self.rx_lost_packages) as f64
+                        * 100.0,
+                    self.rx_received_packages,
+                    self.rx_received_packages + self.rx_lost_packages,
+                    (self.rx_received_bytes as f64) / 1000.0
+                );
                 self.last = time::SystemTime::now();
-                self.count = 0;
+                self.rx_received_bytes = 0;
+                self.rx_received_packages = 0;
+                self.rx_lost_packages = 0;
             }
         }
     }
@@ -220,7 +286,7 @@ fn create_device(
     } else if config.starts_with("serial:") {
         create_serial_device(&config[7..], tx_generator, rx_generator, stop)
     } else {
-        panic!("unsupported device {:?}", config)
+        panic!("unsupported device {}", config)
     }
 }
 
